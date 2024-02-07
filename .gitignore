@@ -1,0 +1,9 @@
+﻿.vs
+.apk
+.dll
+.bin
+.elf
+
+# References
+ReferenceFor_E-Paper_ESP32_Driver_Board
+epd4in01f-demo
