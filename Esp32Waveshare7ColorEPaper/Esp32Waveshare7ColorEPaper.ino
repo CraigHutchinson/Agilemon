@@ -8,7 +8,7 @@
 #include <Wire.h>
 #include "Adafruit_4_01_ColourEPaper.h"
 
-char firmwareDate[] = "07/02/2024";
+const char firmwareDate[] = "07/02/2024";
 
 /** User-provided configuration that contains SSID, WiFi wifiPassword & Octopus personal authorisation code
 @code
@@ -17,40 +17,46 @@ char firmwareDate[] = "07/02/2024";
   const char* auth_string = "API Authorisation Code from Octopus Energy Account";
 @endcode
 */
-#include "secrets.h" // 
+#include "secrets.h"
 
 // SPI
-#define DIN_PIN	14	//SPI MOSI pin, data input
-#define SCLK_PIN	13	//SPI CLK pin, clock signal input
-#define CS_PIN	15	//Chip selection, low active
+const int DIN_PIN = 14;	//SPI MOSI pin, data input
+const int SCLK_PIN = 13;	//SPI CLK pin, clock signal input
+const int CS_PIN = 15;	//Chip selection, low active
 
-#define DC_PIN	27	//Data/command, low for commands, high for data
-#define RST_PIN	26	//Reset, low active
-#define BUSY_PIN	25	//Busy status output pin (means busy)
+const int DC_PIN = 27;	//Data/command, low for commands, high for data
+const int RST_PIN = 26;	//Reset, low active
+const int BUSY_PIN = 25;	//Busy status output pin (means busy)
 
 /**********************************
 Color Index
 **********************************/
-#define EPD_4IN01F_BLACK   0x0	/// 000
-#define EPD_4IN01F_WHITE   0x1	///	001
-#define EPD_4IN01F_GREEN   0x2	///	010
-#define EPD_4IN01F_BLUE    0x3	///	011
-#define EPD_4IN01F_RED     0x4	///	100
-#define EPD_4IN01F_YELLOW  0x5	///	101
-#define EPD_4IN01F_ORANGE  0x6	///	110
-#define EPD_4IN01F_CLEAN   0x7	///	111   unavailable  Afterimage
+const int EPD_4IN01F_BLACK = 0x0;	/// 000
+const int EPD_4IN01F_WHITE = 0x1;	///	001
+const int EPD_4IN01F_GREEN = 0x2;	///	010
+const int EPD_4IN01F_BLUE = 0x3;	///	011
+const int EPD_4IN01F_RED = 0x4;	///	100
+const int EPD_4IN01F_YELLOW = 0x5;	///	101
+const int EPD_4IN01F_ORANGE = 0x6;	///	110
+const int EPD_4IN01F_CLEAN = 0x7;	///	111   unavailable  Afterimage
 
-#define EPD_4IN01F_WIDTH       640
-#define EPD_4IN01F_HEIGHT      400
+const int EPD_4IN01F_WIDTH = 640;
+const int EPD_4IN01F_HEIGHT = 400;
 
 
-#define SCREEN_WIDTH EPD_4IN01F_WIDTH     // OLED display width, in pixels
-#define SCREEN_HEIGHT EPD_4IN01F_HEIGHT     // OLED display height, in pixels
+const int SCREEN_WIDTH = EPD_4IN01F_WIDTH;     // OLED display width, in pixels
+const int SCREEN_HEIGHT = EPD_4IN01F_HEIGHT;     // OLED display height, in pixels
 
-#define SCREEN_WHITE EPD_4IN01F_WHITE
-#define SCREEN_BLACK EPD_4IN01F_BLACK
+const int SCREEN_BLACK = EPD_4IN01F_BLACK;
+const int SCREEN_WHITE = EPD_4IN01F_WHITE;
+const int SCREEN_GREEN = EPD_4IN01F_GREEN;
+const int SCREEN_BLUE = EPD_4IN01F_BLUE;
+const int SCREEN_RED = EPD_4IN01F_RED;
+const int SCREEN_YELLOW = EPD_4IN01F_YELLOW;
+const int SCREEN_ORANGE = EPD_4IN01F_ORANGE;
+const int SCREEN_CLEAN = EPD_4IN01F_CLEAN;
 
-bool headless = false; //< Run without display
+const bool headless = false; //< Run without display
 // Display Scehmatic https://files.waveshare.com/upload/b/bb/4.01inch_e-Paper_HAT_%28F%29.pdf
 // Reference design https://files.waveshare.com/upload/f/f0/4.01inch-ePaper-F-Reference-Design.pdf
 Adafruit_4_01_ColourEPaper display(
@@ -68,8 +74,8 @@ void printTime(time_t timeToPrint);  // Print time to serial monitor
 void Get_Octopus_Data();             // Get Octopus Data
 //void printLocalTime();
 void timeavailable(struct timeval* t);  // Callback function (get's called when time adjusts via NTP)
-void updateDisplay();                      // Routine Refresh of Display
-void graphOLED();                       // Draw tariff graph
+void drawStats();                      // Routine Refresh of Display
+void drawGraph();                       // Draw tariff graph
 //
 // WiFi Credentials
 //
@@ -120,23 +126,26 @@ const char* octopus =
 //
 // Create arrays to store start times of each 1/2hr tariff slot and agile tariff for each
 //
-double tariffArray[200];
-double lowestTariffVisible = 99.99;  // to store lowest tariff & time slot present in available data
-double lowestTariffTime = 0;
+float tariffArray[200];
+float lowestTariffVisible = 99.99;  // to store lowest tariff & time slot present in available data
+float lowestTariffTime = 0;
+float highestTariffVisible = INT_MIN;  // to store lowest tariff & time slot present in available data
+float highestTariffTime = 0;
+bool haveNtpTime = false;
 time_t startTimeArray[200];
 time_t currentTime;
-double currentTariff = 99.99;  // to hold live tariff for display
-// Set LED Pins
-int greenLEDPin = 19;
-int redLEDPin = 18;
-int boostButtonPin = 15;
+float currentTariff = 99.99;  // to hold live tariff for display
 
-const double tariffThreshold = 7.0;             // Tariff level below which the output pin (greenLEDPin) will be set LOW (Gas 9.84p / kWh at 6/1/2023)
-long int lastTariffUpdate = 0;                  // used to store millis() of last tariff update
-const long int tariffUpdateInterval = 3600000;  // millis() between successive tariff updates from Octopus (3600000ms = 1h, 10800s = 3h, 14400s = 4h)
+const float tariffThreshold = 7.0;             // Tariff level below which the output pin (greenLEDPin) will be set LOW (Gas 9.84p / kWh at 6/1/2023)
+
+long int nextTarriffUpdate = 0;                  // used to store millis() of last tariff update
+const long int tariffUpdateInterval = 60 * 60 * 1000 ;  // millis() between successive tariff updates from Octopus (3600000ms = 1h, 10800s = 3h, 14400s = 4h)
+const long int tariffRetryInterval = 5 * 1000 ; //< Prevent API spamming for retries
 int numRecords = 0;                             // No. of tariff records available from Octopus API
-long int setOutputInterval = 45000;             // interval between checks of current tariff data against tariffThreshold
-int d = 1;                                      // Counter for cycling the display content
+
+const long int displayUpdateInterval = 5 * 60 * 1000;             // interval between checks of current tariff data against tariffThreshold
+long int nextDisplayUpdate = 0;
+
 //
 WiFiClientSecure client;
 JsonDocument doc;
@@ -159,9 +168,15 @@ void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info)
 {
   Serial.println("Disconnected from WiFi access point");
   Serial.print("WiFi lost connection. Reason: ");
-  Serial.println(info.wifi_sta_disconnected.reason);
-  Serial.println("Trying to Reconnect");
-  WiFi.begin(wifiSsid, wifiPassword);
+  Serial.println(WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason));
+}
+
+int colorForTarif( float tarif )
+{
+  if ( tarif < 0 ) return SCREEN_BLUE;
+  if ( tarif < 10 ) return SCREEN_GREEN;
+  if ( tarif < 20 ) return SCREEN_ORANGE;
+  return SCREEN_RED;
 }
 
 //
@@ -178,6 +193,7 @@ void setup() {
       Serial.println(F("ePaper allocation failed"));
       for (;;);  // Don't proceed, loop forever
     }
+    /*
     // Clear the display buffer
     display.clearDisplay();
     // Display date of this code
@@ -196,29 +212,31 @@ void setup() {
 
     display.display();  // Show initial text  
    display.waitForScreenBlocking(); //< Wait for prior update to complete
+   */
   }
   
   //delay(2000);
   //
   // Time Setup
   sntp_set_time_sync_notification_cb(timeavailable);
-  /**
-     NTP server address could be aquired via DHCP,
 
-     NOTE: This call should be made BEFORE esp32 aquires IP address via DHCP,
-     otherwise SNTP option 42 would be rejected by default.
-     NOTE: configTime() function call if made AFTER DHCP-client run
-     will OVERRIDE aquired NTP server address
+  /**
+    NTP server address could be aquired via DHCP,
+
+    NOTE: This call should be made BEFORE esp32 aquires IP address via DHCP,
+    otherwise SNTP option 42 would be rejected by default.
+    NOTE: configTime() function call if made AFTER DHCP-client run
+    will OVERRIDE aquired NTP server address
   */
   sntp_servermode_dhcp(1);  // (optional)
+      
   /**
-     This will set configured ntp servers and constant TimeZone/daylightOffset
-     should be OK if your time zone does not need to adjust daylightOffset twice a year,
-     in such a case time adjustment won't be handled automagicaly.
+    This will set configured ntp servers and constant TimeZone/daylightOffset
+    should be OK if your time zone does not need to adjust daylightOffset twice a year,
+    in such a case time adjustment won't be handled automagicaly.
   */
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2);
-
-
+    
   WiFi.onEvent(WiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
   WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
@@ -228,11 +246,6 @@ void setup() {
   Serial.println(eventID);
   WiFi.removeEvent(eventID);*/
 
-  Serial.print("Attempting to connect to SSID: ");
-  Serial.println(wifiSsid);
-  WiFi.begin(wifiSsid, wifiPassword);
-
-  //TODO: WIFI.setAutoReconnect()
   //
 
  /* display.clearDisplay();
@@ -253,23 +266,47 @@ void setup() {
 //**************************************
 void loop() {
   
-  if ( WiFi.isConnected() )
-  {
     //TODO: Should use NTC clock for daily fetch
-    if (lastTariffUpdate == 0 
-      || millis() > (lastTariffUpdate + tariffUpdateInterval))  // update Octopus tariff periodically
+  if (nextTarriffUpdate == 0 
+    || millis() >= nextTarriffUpdate )  // update Octopus tariff periodically
+  {
+    if ( WiFi.getMode() == WIFI_OFF )
     {
-      Get_Octopus_Data();
-      if ( numRecords )
+      Serial.print("WiFi connecting to SSID: ");
+      Serial.println(wifiSsid);
+      
+      WiFi.mode( WIFI_STA );
+      WiFi.begin(wifiSsid, wifiPassword);
+    }
+
+    if ( haveNtpTime &&  WiFi.isConnected() )
+    {
+      numRecords = 0; //< Clear stale data
+
+      Get_Octopus_Data();  
+
+      if ( numRecords != 0)  
       {
-        lastTariffUpdate = millis();
+        nextTarriffUpdate += tariffUpdateInterval; //< Delay until next tarriff update
+        nextDisplayUpdate = millis(); //< Update display now 
+        
+      //Save power by diconnecting Wifi until next needed
+        WiFi.disconnect(true);
+      }
+      else
+      {
+        // Prevent API spamming on retries
+        nextTarriffUpdate += tariffRetryInterval;
       }
     }
+
   }
   
   // TODO: better timed event
-  if (lastTariffUpdate != 0 && (millis() % setOutputInterval) == 0)  // START OF TIMED LOOP : Code run each time tariff is checked & immersion output set
+  if ( numRecords 
+    && (millis() > nextDisplayUpdate) )
   {
+    nextDisplayUpdate += displayUpdateInterval;
     //
     //printLocalTime();  // it will take some time to sync time :)
     //
@@ -284,8 +321,10 @@ void loop() {
       Serial.print(", Tariff Threshold is ");
       Serial.println(tariffThreshold);
       int i = 0;
-      lowestTariffVisible = 99.99;  // reset to 'crazy' values immediately before setting correctly
+      lowestTariffVisible = INT_MAX;  // reset to 'crazy' values immediately before setting correctly
       lowestTariffTime = 0;
+      highestTariffVisible = INT_MIN;  // reset to 'crazy' values immediately before setting correctly
+      highestTariffTime = 0;
       while (i <= numRecords) {
         if ((currentTime > startTimeArray[i]) && ((currentTime - startTimeArray[i]) < 1800)) {
 //        if (currentTime > (startTimeArray[i] + 1800)) {
@@ -314,6 +353,11 @@ void loop() {
           Serial.print(", ");
           Serial.println(startTimeArray[i]);
         }
+        if ((tariffArray[i] > highestTariffVisible) && (startTimeArray[i] + 1800) > currentTime)  // find lowest published tariff beyond present one
+        {
+          highestTariffVisible = tariffArray[i];  // find highest tariff present in available data
+          highestTariffTime = startTimeArray[i];
+        }
         i++;
       }
       Serial.print("Lowest Future Tariff Published = ");
@@ -321,23 +365,23 @@ void loop() {
       Serial.print("Time to Lowest Tariff is ");
       Serial.print((lowestTariffTime - currentTime) / 3600);
       Serial.println(" h");
-      //if (d == 1) {
-        updateDisplay();
-      //}
-      //if (d == 2) {
-      //  graphOLED();
-      //}
-      //d++;
-      //if (d > 2) {
-      //  d = 1;  //Reset display content counter
-      //}
 
-      display.
+
+      if (!headless)
+      {
+          display.clearDisplay();
+
+          drawStats();
+          drawGraph();
+
+          display.display();
+          display.waitForScreenBlocking();
+      }
   }
 } 
 
 void Get_Octopus_Data()  // Get Octopus Data
-{
+{  
   Serial.println("\nBegin get octopus data...");
   client.setCACert(octopus);
   Serial.println("\nStarting connection to Octopus server...");
@@ -382,6 +426,9 @@ void Get_Octopus_Data()  // Get Octopus Data
     // Wait for data bytes to be received
     while (client.connected() && !client.available() );
 
+    //TODO: Await data complete?!?!
+    delay(250);
+
     // If there are incoming bytes available
     // from the server, read them and print them:
     while (client.available()) 
@@ -404,7 +451,7 @@ void Get_Octopus_Data()  // Get Octopus Data
         
         for ( int i =0; i < numRecords; ++i )
          {
-          double tariff = doc["results"][i]["value_inc_vat"];
+          float tariff = doc["results"][i]["value_inc_vat"];
           tariffArray[i] = tariff;
           String periodStart = doc["results"][i]["valid_from"];
           struct tm tmpTime;
@@ -423,9 +470,6 @@ void Get_Octopus_Data()  // Get Octopus Data
       client.stop();
     }
   }
-
-  
-  Serial.println("DONE!?!?!?");
 }
 //
 void printTime(time_t timeToPrint)  // Print time to serial monitor
@@ -451,14 +495,10 @@ void printLocalTime() {
 //  display.print(&timeinfo, "%A, %B %d %Y %H:%M:%S");
 }
 */
-void updateDisplay() {
-  if ( headless )
-    return;
-
+void drawStats() {
     
   Serial.print("Updating display...");
 
-  display.clearDisplay();
   //
   struct tm timeinfo;
   if (!getLocalTime(&timeinfo)) {
@@ -475,82 +515,88 @@ void updateDisplay() {
   display.print(&timeinfo, "%A, %B %d %H:%M:%S");
   
   display.setCursor(0, 28);
-  display.setTextSize(3);
-  display.print("Current ");
+  display.setTextSize(5);
+  display.setTextColor( colorForTarif(currentTariff));
+  display.print("Current = ");
   display.print(currentTariff);
   display.println(" p");
   
-  display.print("Next Low");
-  display.print(lowestTariffVisible);
-  display.println(" p");
+  display.setTextSize(3);
+  display.setTextColor( colorForTarif(highestTariffVisible));
+  display.print("Next High = ");
+  display.print(highestTariffVisible);
+  display.print("p (In ");
+  display.print(int((highestTariffTime - currentTime) / 3600));
+  display.print("h ");
+  display.print(int((((highestTariffTime - currentTime) / 3600) - int((highestTariffTime - currentTime) / 3600)) * 60));
+  display.println("m)");
 
-  display.print("In ");
+  display.setTextColor( SCREEN_GREEN );//colorForTarif(highestTariffVisible));
+  display.print("Next Low = ");
+  display.print(lowestTariffVisible);
+  display.print("p (In ");
   display.print(int((lowestTariffTime - currentTime) / 3600));
   display.print("h ");
   display.print(int((((lowestTariffTime - currentTime) / 3600) - int((lowestTariffTime - currentTime) / 3600)) * 60));
-  display.println("m");
+  display.println("m)");
 
-  display.display();
-  
-   display.waitForScreenBlocking(); //< Wait for prior update to complete
-  
-  Serial.print("Display update done ");
+  display.setTextColor(SCREEN_BLACK);
 }
 // Callback function (get's called when time adjusts via NTP)
 //
 void timeavailable(struct timeval* t) {
   Serial.println("Got time adjustment from NTP!");
+  haveNtpTime = true;
   //  printLocalTime();
 }
 //
-void graphOLED() {
-  display.clearDisplay();
+void drawGraph() {
+  const int left = 0;
+  const int top =  SCREEN_HEIGHT/2;
+  const int w = SCREEN_WIDTH;
+  const int h = SCREEN_HEIGHT/2 - 15;
+
   //  display.drawLine(0, 15, 0, 63, SCREEN_BLACK);  // Draw Axes
-  display.drawLine(0, 63, 127, 63, SCREEN_BLACK);
+  display.drawLine(left, top+h, w, top+h, SCREEN_BLACK);
   int i = 1;
-  while (i < 128) {
-    if (i % 3 == 0) {
-      display.drawPixel(i, 53, SCREEN_BLACK);  // Draw grid line at 10p intervals
-      display.drawPixel(i, 43, SCREEN_BLACK);
-      display.drawPixel(i, 33, SCREEN_BLACK);
+  const auto xCoeff = (w / ((startTimeArray[0] - currentTime) / 1800))-1;
+
+  while (i < w) {
+    if (i % xCoeff == 0) {
+      display.drawPixel(i, top+ h/2 + 10, SCREEN_BLACK);  // Draw grid line at 10p intervals
+      display.drawPixel(i, top+ h/2, SCREEN_BLACK);
+      display.drawPixel(i, top+ h/2 - 10, SCREEN_BLACK);
     }
     i++;
-  }  //
-  i = 0;
-  while (i <= numRecords) {
+  } 
+
+  display.setCursor(0, top+h);
+  display.setTextSize(2);
+  display.print("Now");
+
+  for (int i =0; i <= numRecords; ++i)
+   {
+    const auto xCurrent = ((startTimeArray[i] - currentTime) / 1800);
+
     if (currentTime < startTimeArray[i])  // only plot future values
     {
-      if (startTimeArray[i] == lowestTariffTime) { // Draw circle around the lowest tariff visible, to highlight it
-        display.fillCircle(((startTimeArray[i] - currentTime) / 1800) * (127 / ((startTimeArray[0] - currentTime) / 1800)), (63 - int(tariffArray[i])), 4, SCREEN_BLACK);
-        display.fillCircle(((startTimeArray[i] - currentTime) / 1800) * (127 / ((startTimeArray[0] - currentTime) / 1800)), (63 - int(tariffArray[i])), 3, SCREEN_WHITE);
-        // Change above to triangles?
-        display.drawLine(((startTimeArray[i] - currentTime) / 1800) * (127 / ((startTimeArray[0] - currentTime) / 1800)), 63, ((startTimeArray[i] - currentTime) / 1800) * (127 / ((startTimeArray[0] - currentTime) / 1800)), (63 - int(tariffArray[i])), SCREEN_BLACK);
-      } else {
-        //      Serial.println(int(tariffArray[i]));
-        //      display.drawLine((startTimeArray[i] - currentTime) / 900, 63, (startTimeArray[i] - currentTime) / 900, (63 - int(tariffArray[i])), SCREEN_BLACK);
-        display.drawLine(((startTimeArray[i] - currentTime) / 1800) * (127 / ((startTimeArray[0] - currentTime) / 1800)), 63, ((startTimeArray[i] - currentTime) / 1800) * (127 / ((startTimeArray[0] - currentTime) / 1800)), (63 - int(tariffArray[i])), SCREEN_BLACK);
-        Serial.print(((startTimeArray[0] - currentTime) / 1800));
-        Serial.print(" ");
-        Serial.println(((startTimeArray[i] - currentTime) / 1800) * (127 / ((startTimeArray[0] - currentTime) / 1800)));
+      int color = colorForTarif( tariffArray[i]);
+      
+      const auto hTarrif = int(tariffArray[i])*8;
+      const auto yTarrif = top + (h - hTarrif);
+
+      if (startTimeArray[i] == lowestTariffTime) 
+      { // Draw circle around the lowest tariff visible, to highlight it
+        display.drawCircle(xCurrent * xCoeff, yTarrif, xCoeff/2, SCREEN_BLACK);
+        display.drawCircle(xCurrent * xCoeff, yTarrif, xCoeff/2-2, SCREEN_BLUE);
+        color = SCREEN_GREEN;
       }
+      
+      display.fillRect(
+            xCurrent * xCoeff
+          , yTarrif
+          , xCoeff-2
+          , hTarrif, color);
     }
-    i++;
-    display.setTextSize(3);
-    display.setTextColor(SCREEN_BLACK);
-    display.setCursor(4, 0);
-    display.print("Next Lowest ");
-    //    display.setCursor(50, 57);
-    display.print(lowestTariffVisible);
-    display.print("p");
-    display.setCursor(30, 12);
-    //  display.print("Next Lowest ");
-    // display.setCursor(50, 57);
-    display.print("In ");
-    display.print(int((lowestTariffTime - currentTime) / 3600));
-    display.print("h ");
-    display.print(int((((lowestTariffTime - currentTime) / 3600) - int((lowestTariffTime - currentTime) / 3600)) * 60));
-    display.print("m");
   }
-  display.display();      
-  display.waitForScreenBlocking();
 }
