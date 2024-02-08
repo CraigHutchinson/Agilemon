@@ -6,6 +6,11 @@
 #include <ArduinoJson.h>
 #include <SPI.h>
 #include <Wire.h>
+#include <Adafruit_GFX.h>
+
+//https://learn.adafruit.com/adafruit-gfx-graphics-library/using-fonts
+#include <Fonts/FreeMonoBoldOblique12pt7b.h>
+#include <Fonts/FreeSerif9pt7b.h>
 #include "Adafruit_4_01_ColourEPaper.h"
 
 const char firmwareDate[] = "07/02/2024";
@@ -188,6 +193,7 @@ void setup() {
   Serial.println(F("Booty bootface..."));
   if (!headless)
   {
+    
     display.cp437(true); //< Use correct character tables
     if ( !display.begin(SCLK_PIN, DIN_PIN, CS_PIN)) {
       Serial.println(F("ePaper allocation failed"));
@@ -371,8 +377,8 @@ void loop() {
       {
           display.clearDisplay();
 
-          drawStats();
           drawGraph();
+          drawStats(); //< NOTES: Stats drawn ontop
 
           display.display();
           display.waitForScreenBlocking();
@@ -506,22 +512,22 @@ void drawStats() {
     return;
   }
   //
-  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-  //  display.print(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-  //
-  display.setTextSize(3);
-  display.setTextColor(SCREEN_BLACK);
-  display.setCursor(0, 0);
-  display.print(&timeinfo, "%A, %B %d %H:%M:%S");
+  //Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
   
-  display.setCursor(0, 28);
-  display.setTextSize(5);
+  display.setFont(&FreeMonoBoldOblique12pt7b);    
+  display.setTextSize(1);
+  display.setTextColor(SCREEN_BLACK);
+  display.setCursor(0, 15);
+  display.println(&timeinfo, "%A, %B %d @ %H:%M:%S");
+  
+  display.setCursor(0, 35);
+  display.setTextSize(2);
   display.setTextColor( colorForTarif(currentTariff));
   display.print("Current = ");
   display.print(currentTariff);
   display.println(" p");
   
-  display.setTextSize(3);
+  display.setTextSize(1);
   display.setTextColor( colorForTarif(highestTariffVisible));
   display.print("Next High = ");
   display.print(highestTariffVisible);
@@ -569,6 +575,7 @@ void drawGraph() {
     }
     i++;
   } 
+    display.setFont(); //< default font
 
   display.setCursor(0, top+h);
   display.setTextSize(2);

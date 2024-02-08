@@ -203,7 +203,7 @@ void Adafruit_4_01_ColourEPaper::display(void)
     {
         Serial.println("Writing to GDDR");
     }
-
+#if false
     for (long i = 0; i < (WIDTH * HEIGHT / 2) / 2; i++)
     {
         writeSPI(buffer1[i], false);
@@ -213,6 +213,17 @@ void Adafruit_4_01_ColourEPaper::display(void)
     {
         writeSPI(buffer2[i], false);
     }
+#else
+    //Data
+    digitalWrite(dcPin, HIGH);
+    digitalWrite(csPin, LOW);
+
+    spi->transfer( buffer1, (WIDTH * HEIGHT / 2) / 2 );
+    spi->transfer( buffer2, (WIDTH * HEIGHT / 2) / 2 );
+
+    digitalWrite(csPin, HIGH);
+
+#endif
     if (debugOn)
     {
         Serial.println("Wrote stuff to GDDR");
@@ -245,91 +256,22 @@ void Adafruit_4_01_ColourEPaper::drawPixel(int16_t x, int16_t y, uint16_t color)
         return;
     }
     long pixelNum = (y * WIDTH) + x;
+    
     bool after = pixelNum % 2; // if remainder is 0, most significant nibble, if remainder is 1, least significant nibble
     long byteNum = pixelNum / 2;
-    bool secondBuffer = false;
-    if (debugOn)
+    
+    const bool secondBuffer = byteNum >= (WIDTH * (HEIGHT / 2)) / 2;
+    if ( secondBuffer )
     {
-        Serial.print("Master Pixel number:\t");
-        Serial.println(pixelNum);
-    }
-
-    if (pixelNum < WIDTH * (HEIGHT / 2))
-    {
-        if (debugOn)
-        {
-            Serial.println("Buffer 1");
-        }
-        secondBuffer = false;
-    }
-    else
-    {
-        if (debugOn)
-        {
-            Serial.println("Buffer 2");
-        }
-        secondBuffer = true;
-        pixelNum -= 128000;
-    }
-
-    after = pixelNum % 2;
-    byteNum = pixelNum / 2;
-
-    if (debugOn)
-    {
-        Serial.print("Pixel number:\t");
-        Serial.println(pixelNum);
-        Serial.print("Byte number:\t");
-        Serial.println(byteNum);
-        Serial.print("Position:\t");
-        if (after)
-        {
-            Serial.println("After");
-        }
-        else
-        {
-            Serial.println("Before");
-        }
+        byteNum -= WIDTH * (HEIGHT / 2) / 2;
     }
 
     // at this point, we know which buffer, which byte, and position
     // now we have to locate the byte, and edit it
-    if (!secondBuffer)
-    {
-        // if first buffer
-        if (after)
-        {
-            char newByte = buffer1[byteNum]; // get the byte
-            newByte &= 0xF0;                 // clear the latter half for new colour
-            newByte |= color;
-            buffer1[byteNum] = newByte;
-        }
-        else
-        {
-            char newByte = buffer1[byteNum];
-            newByte &= 0xF;
-            newByte |= (color << 4);
-            buffer1[byteNum] = newByte;
-        }
-    }
-    else
-    {
-        // if second buffer
-        if (after)
-        {
-            char newByte = buffer2[byteNum];
-            newByte &= 0xF0;
-            newByte |= color;
-            buffer2[byteNum] = newByte;
-        }
-        else
-        {
-            char newByte = buffer2[byteNum];
-            newByte &= 0xF;
-            newByte |= (color << 4);
-            buffer2[byteNum] = newByte;
-        }
-    }
+    char* buffer = (secondBuffer ? buffer2 : buffer1);
+    char newByte = buffer[byteNum]; // get the byte
+    buffer[byteNum] = after ? (newByte & 0xF0) | color
+                            : (newByte & 0x0F) | (color<<4) ;                 // clear the latter half for new colour
 }
 
 void Adafruit_4_01_ColourEPaper::test(void)
