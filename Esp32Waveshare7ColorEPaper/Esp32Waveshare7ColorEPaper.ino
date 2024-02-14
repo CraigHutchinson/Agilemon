@@ -7,6 +7,8 @@
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
+#include <limits>
+#include <algorithm> //< std::clamp
 
 //https://learn.adafruit.com/adafruit-gfx-graphics-library/using-fonts
 #include <Fonts/FreeMonoBoldOblique12pt7b.h>
@@ -32,6 +34,8 @@ const int CS_PIN = 15;	//Chip selection, low active
 const int DC_PIN = 27;	//Data/command, low for commands, high for data
 const int RST_PIN = 26;	//Reset, low active
 const int BUSY_PIN = 25;	//Busy status output pin (means busy)
+
+const int LED_PIN = 2; //< GPIO2 has LED
 
 /**********************************
 Color Index
@@ -126,27 +130,90 @@ const char* octopus =
   "59vPr5KW7ySaNRB6nJHGDn2Z9j8Z3/VyVOEVqQdZe4O/Ui5GjLIAZHYcSNPYeehu\n"
   "VsyuLAOQ1xk4meTKCRlb/weWsKh/NEnfVqn3sF/tM+2MR7cwA130A4w=\n"
   "-----END CERTIFICATE-----\n";
+
+/** Price stored as Float s8p8
+*/
+class Price
+{
+public:
+
+    static constexpr int16_t Scale = 200;
+
+    constexpr Price() : value_() {}
+    constexpr Price(float f) : value_( static_cast<int16_t>(std::round(f * Scale)) ) {}
+    constexpr Price(const Price& rhs) = default;
+
+    constexpr operator float() const
+    {
+      return value_ * (1.0F/Scale); 
+    }
+
+private:
+    int16_t value_;
+};
+
+static_assert(Price(1.1) == 1.1F);
+
+
+/** 30-minute time resolution 
+*/
+class Time
+{
+public:
+  static constexpr uint32_t HalfHour = 60 * 30; //half Hour in seconds (=1800)
+  static constexpr time_t EpochOffset = 1577836800LL; // time_t offset from 00:00 1-1-1970 to 00:00 1-1-2020
+
+  struct Internal{};
+
+  constexpr Time() : value_() {}
+  constexpr Time(time_t t) : value_( t - EpochOffset ) {}
+  constexpr Time(const Time& rhs) = default;
+  constexpr Time(uint32_t value, Internal ) : value_(value) {}
+
+  constexpr time_t to_time_t() const
+  {
+      return static_cast<time_t>(value_) + EpochOffset;
+  }
+  
+  constexpr operator uint32_t() const
+  {
+      return value_;
+  }
+ 
+  Time roundUp()  { return { ((value_ + (HalfHour-1)) / HalfHour) * HalfHour, Internal{} }; }  
+  Time round()   { return { ((value_ + (HalfHour/2)) / HalfHour) * HalfHour, Internal{} }; }
+  Time roundDown()  { return { (value_ / HalfHour) * HalfHour, Internal{} }; }
+
+private:
+    uint32_t value_;
+};
+
 //
 //Define Variables
 //
 // Create arrays to store start times of each 1/2hr tariff slot and agile tariff for each
 //
-float tariffArray[200];
-float lowestTariffVisible = 99.99;  // to store lowest tariff & time slot present in available data
-float lowestTariffTime = 0;
-float highestTariffVisible = INT_MIN;  // to store lowest tariff & time slot present in available data
-float highestTariffTime = 0;
-bool haveNtpTime = false;
-time_t startTimeArray[200];
-time_t currentTime;
-float currentTariff = 99.99;  // to hold live tariff for display
+struct Tariff
+{
+    static constexpr uint8_t MaxRecords = 100;
 
-const float tariffThreshold = 7.0;             // Tariff level below which the output pin (greenLEDPin) will be set LOW (Gas 9.84p / kWh at 6/1/2023)
+    Time startTimes[MaxRecords];
+    Price prices[MaxRecords];
+    
+    uint8_t numRecords = 0; // No. of tariff records available from Octopus API
+};
+Tariff tariff;
+
+uint8_t iCurrentTariff = 0;// to hold live tariff for display
+uint8_t iLowestTariff = 0;  // to store lowest tariff & time slot present in available data
+uint8_t iHighestTariff = 0;  // to store lowest tariff & time slot present in available data
+
+bool haveLocalTime = false;
+Time currentTime; //< CUrrent time in seconds since Epoch
 
 long int nextTarriffUpdate = 0;                  // used to store millis() of last tariff update
 const long int tariffUpdateInterval = 60 * 60 * 1000 ;  // millis() between successive tariff updates from Octopus (3600000ms = 1h, 10800s = 3h, 14400s = 4h)
-const long int tariffRetryInterval = 5 * 1000 ; //< Prevent API spamming for retries
-int numRecords = 0;                             // No. of tariff records available from Octopus API
+const long int tariffRetryInterval = 15 * 1000 ; //< Prevent API spamming for retries
 
 const long int displayUpdateInterval = 5 * 60 * 1000;             // interval between checks of current tariff data against tariffThreshold
 long int nextDisplayUpdate = 0;
@@ -187,6 +254,10 @@ int colorForTarif( float tarif )
 //
 void setup() {
   
+  // initialize digital pin LED_PIN as an output.
+  pinMode(LED_PIN, OUTPUT);
+  digitalWrite(LED_PIN, HIGH);  // turn the LED on (HIGH is the voltage level)
+
   //Initialize serial and wait for port to open:
   Serial.begin(115200);
 
@@ -199,26 +270,6 @@ void setup() {
       Serial.println(F("ePaper allocation failed"));
       for (;;);  // Don't proceed, loop forever
     }
-    /*
-    // Clear the display buffer
-    display.clearDisplay();
-    // Display date of this code
-    display.setTextColor(SCREEN_BLACK);
-    display.setTextSize(3);  // Draw 2X-scale text
-    display.setCursor(0, 0);
-    display.print(firmwareDate);
-    display.setCursor(0, 15);
-    display.setTextSize(2);  // Draw 2X-scale text
-    display.print(F("Starting.."));
-    display.setCursor(0, 40);
-    display.setTextSize(3);  // Draw 2X-scale text
-    display.print(F("Moooo = "));
-    display.print(tariffThreshold,2);
-    display.print("p");
-
-    display.display();  // Show initial text  
-   display.waitForScreenBlocking(); //< Wait for prior update to complete
-   */
   }
   
   //delay(2000);
@@ -285,13 +336,13 @@ void loop() {
       WiFi.begin(wifiSsid, wifiPassword);
     }
 
-    if ( haveNtpTime &&  WiFi.isConnected() )
+    if ( haveLocalTime &&  WiFi.isConnected() )
     {
-      numRecords = 0; //< Clear stale data
+      tariff.numRecords = 0; //< Clear stale data
 
       Get_Octopus_Data();  
 
-      if ( numRecords != 0)  
+      if ( tariff.numRecords != 0)  
       {
         nextTarriffUpdate += tariffUpdateInterval; //< Delay until next tarriff update
         nextDisplayUpdate = millis(); //< Update display now 
@@ -303,16 +354,20 @@ void loop() {
       {
         // Prevent API spamming on retries
         nextTarriffUpdate += tariffRetryInterval;
+        
+        //Reconnect the Wifi if this was at issue
+        //TODO: MOre elegant wifi handling!
+        //WiFi.disconnect();
+        //WiFi.begin(wifiSsid, wifiPassword);
       }
     }
 
   }
   
   // TODO: better timed event
-  if ( numRecords 
+  if ( tariff.numRecords 
     && (millis() > nextDisplayUpdate) )
   {
-    nextDisplayUpdate += displayUpdateInterval;
     //
     //printLocalTime();  // it will take some time to sync time :)
     //
@@ -323,55 +378,47 @@ void loop() {
       Serial.print("currentTime is ");
       Serial.println(currentTime);
       Serial.print("Number of Octopus Tariff Records = ");
-      Serial.print(numRecords);
-      Serial.print(", Tariff Threshold is ");
-      Serial.println(tariffThreshold);
+      Serial.println(tariff.numRecords);
+
       int i = 0;
-      lowestTariffVisible = INT_MAX;  // reset to 'crazy' values immediately before setting correctly
-      lowestTariffTime = 0;
-      highestTariffVisible = INT_MIN;  // reset to 'crazy' values immediately before setting correctly
-      highestTariffTime = 0;
-      while (i <= numRecords) {
-        if ((currentTime > startTimeArray[i]) && ((currentTime - startTimeArray[i]) < 1800)) {
-//        if (currentTime > (startTimeArray[i] + 1800)) {
-          Serial.print("Current Tariff is ");
-          // Serial.print(tariffArray[i], 2);
-          currentTariff = tariffArray[i];
-          Serial.print(currentTariff, 2);
+
+      iCurrentTariff = iLowestTariff = iHighestTariff = 0;
+      while (i < tariff.numRecords) {
+        if ( tariff.startTimes[i] > currentTime)  // find lowest published tariff beyond present one
+        {          
+          if (tariff.prices[i] < tariff.prices[iLowestTariff])
+          {
+              iLowestTariff = i;
+          }
+
+          if (tariff.prices[i] > tariff.prices[iHighestTariff])
+          {
+            iHighestTariff = i;  // find highest tariff present in available data
+          }
+        }
+        else
+        if ((currentTime > tariff.startTimes[i]) && ((currentTime - tariff.startTimes[i]) < Time::HalfHour)) 
+        {
+          iCurrentTariff = i;
+
+          Serial.print("Current Tariff is ");          
+          Serial.print(tariff.prices[iCurrentTariff], 2);
           Serial.print("p (Record #");
           Serial.print(i);
           Serial.println(")");
-          if (tariffArray[i] < tariffThreshold) {
-          //  digitalWrite(greenLEDPin, HIGH);
-            Serial.println("************** LOW TARIFF CONDITION **************");
-          } else {
-          //  digitalWrite(greenLEDPin, LOW);
-          }
-        }
-        if ((tariffArray[i] < lowestTariffVisible) && (startTimeArray[i] + 1800) > currentTime)  // find lowest published tariff beyond present one
-        {
-          lowestTariffVisible = tariffArray[i];  // find lowest tariff present in available data
-          lowestTariffTime = startTimeArray[i];
-          Serial.print("Lowest tariff is ");
-          Serial.println(lowestTariffVisible);
-          Serial.print(", Array Values - ");
-          Serial.print(tariffArray[i]);
-          Serial.print(", ");
-          Serial.println(startTimeArray[i]);
-        }
-        if ((tariffArray[i] > highestTariffVisible) && (startTimeArray[i] + 1800) > currentTime)  // find lowest published tariff beyond present one
-        {
-          highestTariffVisible = tariffArray[i];  // find highest tariff present in available data
-          highestTariffTime = startTimeArray[i];
+
+          break; //< DOn't process the past...
         }
         i++;
       }
+                      
       Serial.print("Lowest Future Tariff Published = ");
-      Serial.println(lowestTariffVisible);
+      Serial.println(tariff.prices[iLowestTariff]);
       Serial.print("Time to Lowest Tariff is ");
-      Serial.print((lowestTariffTime - currentTime) / 3600);
-      Serial.println(" h");
-
+      Serial.print((tariff.startTimes[iLowestTariff] - currentTime) / 3600);
+      Serial.print("h (Record #");
+      Serial.print(i);
+      Serial.println(")");
 
       if (!headless)
       {
@@ -383,6 +430,14 @@ void loop() {
           display.display();
           display.waitForScreenBlocking();
       }
+
+          
+      Serial.println("Going to sleep now");
+      Serial.flush(); 
+      digitalWrite(LED_PIN, LOW);   // turn the LED off by making the voltage LOW
+
+      nextDisplayUpdate += displayUpdateInterval;
+      esp_deep_sleep( (nextDisplayUpdate-millis()) * 1000 );
   }
 } 
 
@@ -430,51 +485,56 @@ void Get_Octopus_Data()  // Get Octopus Data
     }
 
     // Wait for data bytes to be received
-    while (client.connected() && !client.available() );
+    while (client.connected() && !client.available() ) {  delay(250); }
 
     //TODO: Await data complete?!?!
     delay(250);
 
     // If there are incoming bytes available
     // from the server, read them and print them:
+    String line;
     while (client.available()) 
     {
-      String line = client.readStringUntil('\n');
-      // Serial.println(line);
-      DeserializationError error = deserializeJson(doc, line);
-      if (error) {
-        Serial.print(F("deserializing JSON failed"));
-        Serial.println(error.f_str());
-        Serial.println("Here's the JSON I tried to parse");
-        Serial.println(line);
-      }
-       else 
-      {
-        JsonArray results = doc["results"];
-        numRecords = results.size();
-        Serial.print("# of Records is ");
-        Serial.println(numRecords);
-        
-        for ( int i =0; i < numRecords; ++i )
-         {
-          float tariff = doc["results"][i]["value_inc_vat"];
-          tariffArray[i] = tariff;
-          String periodStart = doc["results"][i]["valid_from"];
-          struct tm tmpTime;
-          strptime(periodStart.c_str(), "%Y-%m-%dT%H:%M:%SZ", &tmpTime);
-          startTimeArray[i] = mktime(&tmpTime);
-
-          Serial.print(tariff, 2);
-          Serial.print("p, from ");
-          //          Serial.println(periodStart);
-          Serial.print(periodStart);
-          Serial.print(" ");
-          Serial.println(startTimeArray[i]);
-          //          printTime(startTimeArray[i]);
-        }
-      }
-      client.stop();
+      line += client.readString();
+       delay(100);//< Must be better way to know more data is to come...
     }
+
+    // Serial.println(line);
+    DeserializationError error = deserializeJson(doc, line);
+    if (error) {
+      Serial.print(F("deserializing JSON failed"));
+      Serial.println(error.f_str());
+      Serial.println("Here's the JSON I tried to parse");
+      Serial.println(line);
+    }
+    else 
+    {
+      auto results = doc["results"];
+      // We only consider the first X records as they ar eprovided latest to oldest
+      // note: We only need 48 for a 24hr period
+      tariff.numRecords = std::min( results.size(), (size_t)Tariff::MaxRecords );
+      
+      Serial.print("# of Records is ");
+      Serial.println(tariff.numRecords);
+      
+      for ( int i =0; i < tariff.numRecords; ++i )
+        {
+        auto resultRate = results[i];
+        float price = resultRate["value_inc_vat"];
+        tariff.prices[i] = price;
+        String periodStart = resultRate["valid_from"];
+        struct tm tmpTime;
+        strptime(periodStart.c_str(), "%Y-%m-%dT%H:%M:%SZ", &tmpTime);
+        tariff.startTimes[i] = mktime(&tmpTime);
+        
+        Serial.print(price, 2);
+        Serial.print("p, from ");
+        Serial.print(periodStart);
+        Serial.print(" ");
+        Serial.println(tariff.startTimes[i].to_time_t() );
+      }
+    }
+    client.stop();
   }
 }
 //
@@ -520,30 +580,30 @@ void drawStats() {
   display.setCursor(0, 15);
   display.println(&timeinfo, "%A, %B %d @ %H:%M:%S");
   
-  display.setCursor(0, 35);
+  display.setCursor(0, 55); //< TODO: Why gfx isn;t working this out correctly!?
   display.setTextSize(2);
-  display.setTextColor( colorForTarif(currentTariff));
+  display.setTextColor( colorForTarif(tariff.prices[iCurrentTariff]));
   display.print("Current = ");
-  display.print(currentTariff);
+  display.print(tariff.prices[iCurrentTariff]);
   display.println(" p");
   
   display.setTextSize(1);
-  display.setTextColor( colorForTarif(highestTariffVisible));
+  display.setTextColor( colorForTarif(tariff.prices[iHighestTariff]));
   display.print("Next High = ");
-  display.print(highestTariffVisible);
+  display.print(tariff.prices[iHighestTariff]);
   display.print("p (In ");
-  display.print(int((highestTariffTime - currentTime) / 3600));
+  display.print(int((tariff.startTimes[iHighestTariff] - currentTime) / 3600));
   display.print("h ");
-  display.print(int((((highestTariffTime - currentTime) / 3600) - int((highestTariffTime - currentTime) / 3600)) * 60));
+  display.print(int((((tariff.startTimes[iHighestTariff] - currentTime) / 3600) - int((tariff.startTimes[iHighestTariff] - currentTime) / 3600)) * 60));
   display.println("m)");
 
-  display.setTextColor( SCREEN_GREEN );//colorForTarif(highestTariffVisible));
+  display.setTextColor( SCREEN_GREEN );//colorForTarif(tariff.prices[iHighestTariff]));
   display.print("Next Low = ");
-  display.print(lowestTariffVisible);
+  display.print(tariff.prices[iLowestTariff]);
   display.print("p (In ");
-  display.print(int((lowestTariffTime - currentTime) / 3600));
+  display.print(int((tariff.startTimes[iLowestTariff] - currentTime) / 3600));
   display.print("h ");
-  display.print(int((((lowestTariffTime - currentTime) / 3600) - int((lowestTariffTime - currentTime) / 3600)) * 60));
+  display.print(int((((tariff.startTimes[iLowestTariff] - currentTime) / 3600) - int((tariff.startTimes[iLowestTariff] - currentTime) / 3600)) * 60));
   display.println("m)");
 
   display.setTextColor(SCREEN_BLACK);
@@ -552,7 +612,7 @@ void drawStats() {
 //
 void timeavailable(struct timeval* t) {
   Serial.println("Got time adjustment from NTP!");
-  haveNtpTime = true;
+  haveLocalTime = true;
   //  printLocalTime();
 }
 //
@@ -565,7 +625,9 @@ void drawGraph() {
   //  display.drawLine(0, 15, 0, 63, SCREEN_BLACK);  // Draw Axes
   display.drawLine(left, top+h, w, top+h, SCREEN_BLACK);
   int i = 1;
-  const auto xCoeff = (w / ((startTimeArray[0] - currentTime) / 1800))-1;
+  const Time currentTarriffTime = currentTime.roundDown();
+  const auto barCount = (tariff.startTimes[0] - currentTarriffTime) / Time::HalfHour;
+  const auto xCoeff = (w / barCount);
 
   while (i < w) {
     if (i % xCoeff == 0) {
@@ -581,29 +643,25 @@ void drawGraph() {
   display.setTextSize(2);
   display.print("Now");
 
-  for (int i =0; i <= numRecords; ++i)
+// only plot future values
+  for (int i =0; i <= tariff.numRecords && currentTarriffTime <= tariff.startTimes[i]; ++i)
    {
-    const auto xCurrent = ((startTimeArray[i] - currentTime) / 1800);
-
-    if (currentTime < startTimeArray[i])  // only plot future values
-    {
-      int color = colorForTarif( tariffArray[i]);
+      const auto xCurrent = ((tariff.startTimes[i] - currentTarriffTime) / Time::HalfHour) * xCoeff;
+      int color = colorForTarif( tariff.prices[i]);
       
-      const auto hTarrif = int(tariffArray[i])*8;
+      const auto hTarrif = int(tariff.prices[i])*8;
       const auto yTarrif = top + (h - hTarrif);
 
-      if (startTimeArray[i] == lowestTariffTime) 
+      if (tariff.startTimes[i] == tariff.startTimes[iLowestTariff]) 
       { // Draw circle around the lowest tariff visible, to highlight it
-        display.drawCircle(xCurrent * xCoeff, yTarrif, xCoeff/2, SCREEN_BLACK);
-        display.drawCircle(xCurrent * xCoeff, yTarrif, xCoeff/2-2, SCREEN_BLUE);
+        display.drawCircle(xCurrent + xCoeff/2, yTarrif-xCoeff/2, xCoeff/2, SCREEN_BLUE);
         color = SCREEN_GREEN;
       }
       
       display.fillRect(
-            xCurrent * xCoeff
+            xCurrent
           , yTarrif
           , xCoeff-2
           , hTarrif, color);
     }
-  }
 }
