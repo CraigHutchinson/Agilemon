@@ -85,15 +85,7 @@ void Get_Octopus_Data();             // Get Octopus Data
 void timeavailable(struct timeval* t);  // Callback function (get's called when time adjusts via NTP)
 void drawStats();                      // Routine Refresh of Display
 void drawGraph();                       // Draw tariff graph
-//
-// WiFi Credentials
-//
-//const char* wifiSsid = "YOUR SSID HERE";  NOTE: These data now picked up from secrets.h file
-//const char* wifiPassword = "YOUR PASSWORD HERE";
-//
-//Set API Sources
-//
-//const char* auth_string = "PUT YOUR OCTOPUS AUTHORISATION CODE HERE"
+
 const char* server = "api.octopus.energy";  // Server URL
 const char* ntpServer1 = "pool.ntp.org";
 const char* ntpServer2 = "time.nist.gov";
@@ -180,9 +172,9 @@ public:
       return value_;
   }
  
-  Time roundUp()  { return { ((value_ + (HalfHour-1)) / HalfHour) * HalfHour, Internal{} }; }  
-  Time round()   { return { ((value_ + (HalfHour/2)) / HalfHour) * HalfHour, Internal{} }; }
-  Time roundDown()  { return { (value_ / HalfHour) * HalfHour, Internal{} }; }
+  Time roundUp( uint32_t toMul = HalfHour )  { return { ((value_ + (toMul-1)) / toMul) * toMul, Internal{} }; }  
+  Time round( uint32_t toMul = HalfHour)   { return { ((value_ + (toMul/2)) / toMul) * toMul, Internal{} }; }
+  Time roundDown( uint32_t toMul = HalfHour)  { return { (value_ / toMul) * toMul, Internal{} }; }
 
 private:
     uint32_t value_;
@@ -212,16 +204,26 @@ bool haveLocalTime = false;
 Time currentTime; //< CUrrent time in seconds since Epoch
 
 long int nextTarriffUpdate = 0;                  // used to store millis() of last tariff update
-const long int tariffUpdateInterval = 60 * 60 * 1000 ;  // millis() between successive tariff updates from Octopus (3600000ms = 1h, 10800s = 3h, 14400s = 4h)
-const long int tariffRetryInterval = 15 * 1000 ; //< Prevent API spamming for retries
+const int tariffUpdateIntervalSec = 60 * 60 ;  // millis() between successive tariff updates from Octopus (3600000ms = 1h, 10800s = 3h, 14400s = 4h)
+const int tariffRetryIntervalSec = 30 ; //< Prevent API spamming for retries
 
-const long int displayUpdateInterval = 5 * 60 * 1000;             // interval between checks of current tariff data against tariffThreshold
+const int displayMinimumUpdateInterval = 30; /// Don't update display faster than this
+const int displayUpdateIntervalSec = 15 * 60;             // interval between checks of current tariff data against tariffThreshold
 long int nextDisplayUpdate = 0;
 
 //
 WiFiClientSecure client;
 JsonDocument doc;
 
+
+/** STA driver started
+*/
+void WiFiStationStarted(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+  Serial.print("WiFi started, connecting to SSID: ");
+  Serial.println(wifiSsid);  
+  WiFi.begin(wifiSsid, wifiPassword);
+}
 
 void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info)
 {
@@ -238,10 +240,48 @@ void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 
 void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info)
 {
-  Serial.println("Disconnected from WiFi access point");
-  Serial.print("WiFi lost connection. Reason: ");
-  Serial.println(WiFi.disconnectReasonName((wifi_err_reason_t)info.wifi_sta_disconnected.reason));
+  wifi_err_reason_t reason = (wifi_err_reason_t)info.wifi_sta_disconnected.reason;
+
+  Serial.print("WiFi AP diconnected. Reason: ");
+  Serial.print(reason);
+  Serial.print(" = ");
+  Serial.println(WiFi.disconnectReasonName(reason));
+  //TODO:
+   // - NO_AP_FOUND == SSID isn't available
+
+  // If not left by choice....
+   if ( reason != WIFI_REASON_ASSOC_LEAVE )
+   {
+      Serial.print("WiFi connect failed to: ");
+      Serial.println(wifiSsid);  
+      nextTarriffUpdate += tariffRetryIntervalSec * 1000; //< Delay between retry on connection failure 
+      WiFi.reconnect();
+  }
 }
+
+/** STA driver stopped
+*/
+void WiFiStationStopped(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+  Serial.println("WiFi client stopped");
+}
+
+/*
+	ARDUINO_EVENT_WIFI_READY,
+	ARDUINO_EVENT_WIFI_SCAN_DONE,
+	ARDUINO_EVENT_WIFI_STA_START,
+	ARDUINO_EVENT_WIFI_STA_STOP,
+	ARDUINO_EVENT_WIFI_STA_CONNECTED,
+	ARDUINO_EVENT_WIFI_STA_DISCONNECTED,
+	ARDUINO_EVENT_WIFI_STA_AUTHMODE_CHANGE,
+	ARDUINO_EVENT_WIFI_STA_GOT_IP,
+	ARDUINO_EVENT_WIFI_STA_GOT_IP6,
+	ARDUINO_EVENT_WIFI_STA_LOST_IP,
+*/
+//void WiFiEvent(WiFiEvent_t event){
+//    Serial.printf("[WiFi-event] event: %d\n", event);
+//}
+
 
 int colorForTarif( float tarif )
 {
@@ -293,11 +333,12 @@ void setup() {
     in such a case time adjustment won't be handled automagicaly.
   */
   configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2);
-    
+
+  WiFi.onEvent(WiFiStationStarted, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_START);
   WiFi.onEvent(WiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
-  WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);
-
+  WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);  
+  WiFi.onEvent(WiFiStationStopped, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_STOP);
   /* Remove WiFi event
   Serial.print("WiFi Event ID: ");
   Serial.println(eventID);
@@ -320,6 +361,7 @@ void setup() {
    display.waitForScreenBlocking();
   */
 }
+
 //**************************************
 void loop() {
   
@@ -328,15 +370,14 @@ void loop() {
     || millis() >= nextTarriffUpdate )  // update Octopus tariff periodically
   {
     if ( WiFi.getMode() == WIFI_OFF )
-    {
-      Serial.print("WiFi connecting to SSID: ");
-      Serial.println(wifiSsid);
-      
+    {    
       WiFi.mode( WIFI_STA );
-      WiFi.begin(wifiSsid, wifiPassword);
     }
 
-    if ( haveLocalTime &&  WiFi.isConnected() )
+    const auto wifiStatus = WiFi.status();
+
+    if ( haveLocalTime 
+      && wifiStatus == WL_CONNECTED )
     {
       tariff.numRecords = 0; //< Clear stale data
 
@@ -344,7 +385,7 @@ void loop() {
 
       if ( tariff.numRecords != 0)  
       {
-        nextTarriffUpdate += tariffUpdateInterval; //< Delay until next tarriff update
+        nextTarriffUpdate += tariffUpdateIntervalSec * 1000; //< Delay until next tarriff update
         nextDisplayUpdate = millis(); //< Update display now 
         
       //Save power by diconnecting Wifi until next needed
@@ -353,12 +394,7 @@ void loop() {
       else
       {
         // Prevent API spamming on retries
-        nextTarriffUpdate += tariffRetryInterval;
-        
-        //Reconnect the Wifi if this was at issue
-        //TODO: MOre elegant wifi handling!
-        //WiFi.disconnect();
-        //WiFi.begin(wifiSsid, wifiPassword);
+        nextTarriffUpdate += tariffRetryIntervalSec * 1000;
       }
     }
 
@@ -375,6 +411,19 @@ void loop() {
       struct tm timeinfo;
       getLocalTime(&timeinfo);
       currentTime = mktime(&timeinfo);
+      Time nextTariff = currentTime.roundUp();
+      const auto timeToTariff = nextTariff-currentTime;
+      if ( timeToTariff <= 5 )
+      {
+        currentTime = nextTariff; //< close enough to update as if at next tariff
+      }
+      else
+      if ( timeToTariff <= displayMinimumUpdateInterval ) //< Should await tariff time if within 30 seconds of
+      {
+        nextDisplayUpdate += timeToTariff * 1000;
+        return;
+      }
+
       Serial.print("currentTime is ");
       Serial.println(currentTime);
       Serial.print("Number of Octopus Tariff Records = ");
@@ -417,7 +466,7 @@ void loop() {
       Serial.print("Time to Lowest Tariff is ");
       Serial.print((tariff.startTimes[iLowestTariff] - currentTime) / 3600);
       Serial.print("h (Record #");
-      Serial.print(i);
+      Serial.print(iLowestTariff);
       Serial.println(")");
 
       if (!headless)
@@ -431,13 +480,20 @@ void loop() {
           display.waitForScreenBlocking();
       }
 
-          
-      Serial.println("Going to sleep now");
+      
+      getLocalTime(&timeinfo);
+      Time now = mktime(&timeinfo);
+      Time nextRefreshAt = now.roundUp(displayUpdateIntervalSec);
+      auto timeToRefresh = nextRefreshAt-now;
+      
+      Serial.print("Going to sleep for ");
+      Serial.print(timeToRefresh);
+      Serial.println(" seconds.");
       Serial.flush(); 
       digitalWrite(LED_PIN, LOW);   // turn the LED off by making the voltage LOW
 
-      nextDisplayUpdate += displayUpdateInterval;
-      esp_deep_sleep( (nextDisplayUpdate-millis()) * 1000 );
+      nextDisplayUpdate = millis() + (timeToRefresh * 1000);
+      esp_deep_sleep( timeToRefresh * 1000 * 1000);
   }
 } 
 
@@ -448,14 +504,12 @@ void Get_Octopus_Data()  // Get Octopus Data
   Serial.println("\nStarting connection to Octopus server...");
   if (!client.connect(server, 443)) {
     Serial.println("Connection failed!");
-//    digitalWrite(redLEDPin, HIGH);  // Set LED to indicate connection failure
+    
   } else {
     Serial.println("Connected to server!");
-
- //   digitalWrite(redLEDPin, LOW);
+    
     // Make a HTTP request:
-    //client.println("GET https://api.octopus.energy/v1/products/AGILE-18-02-21/electricity-tariffs/E-1R-AGILE-18-02-21-E/standard-unit-rates/ HTTP/1.1");
-    client.println("GET https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-J/standard-unit-rates/ HTTP/1.1");
+    client.println("GET https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-J/standard-unit-rates/?page_size=60 HTTP/1.1");
     client.println("Host: api.octopus.energy");
     client.println(auth_string); // enter Octopus authorisation string, collected from secrets.h
     client.println("Connection: close");
@@ -484,20 +538,22 @@ void Get_Octopus_Data()  // Get Octopus Data
       }
     }
 
+    //Await receipt of data
+    while( client.connected() && !client.available() );
+    
+    
+    delay(500); //< Must be better way to know more data is to come...
+
     // Wait for data bytes to be received
-    while (client.connected() && !client.available() ) {  delay(250); }
-
-    //TODO: Await data complete?!?!
-    delay(250);
-
-    // If there are incoming bytes available
-    // from the server, read them and print them:
     String line;
-    while (client.available()) 
+    do
     {
       line += client.readString();
-       delay(100);//< Must be better way to know more data is to come...
+      delay(500); //< Must be better way to know more data is to come...
     }
+    while( client.connected() && client.available() ); //< While connected and more data to be received
+
+    client.stop();
 
     // Serial.println(line);
     DeserializationError error = deserializeJson(doc, line);
@@ -527,14 +583,19 @@ void Get_Octopus_Data()  // Get Octopus Data
         strptime(periodStart.c_str(), "%Y-%m-%dT%H:%M:%SZ", &tmpTime);
         tariff.startTimes[i] = mktime(&tmpTime);
         
+#if 0 //< Print tarriff
         Serial.print(price, 2);
         Serial.print("p, from ");
         Serial.print(periodStart);
         Serial.print(" ");
         Serial.println(tariff.startTimes[i].to_time_t() );
+#endif
       }
+    
+      Serial.print("Got Tariff until ");
+      Serial.println(tariff.startTimes[0].to_time_t() );
+        
     }
-    client.stop();
   }
 }
 //
@@ -592,18 +653,24 @@ void drawStats() {
   display.print("Next High = ");
   display.print(tariff.prices[iHighestTariff]);
   display.print("p (In ");
-  display.print(int((tariff.startTimes[iHighestTariff] - currentTime) / 3600));
+  const auto highIn = tariff.startTimes[iHighestTariff] - currentTime;
+  int highHours = highIn / (60*60);
+  int highMinutes = ((highIn+30) / 60) - (highHours * 60);
+  display.print(highHours);
   display.print("h ");
-  display.print(int((((tariff.startTimes[iHighestTariff] - currentTime) / 3600) - int((tariff.startTimes[iHighestTariff] - currentTime) / 3600)) * 60));
+  display.print(highMinutes);
   display.println("m)");
 
   display.setTextColor( SCREEN_GREEN );//colorForTarif(tariff.prices[iHighestTariff]));
   display.print("Next Low = ");
   display.print(tariff.prices[iLowestTariff]);
   display.print("p (In ");
-  display.print(int((tariff.startTimes[iLowestTariff] - currentTime) / 3600));
+  const auto lowIn = tariff.startTimes[iLowestTariff] - currentTime;
+  int lowHours = lowIn / (60*60);
+  int lowMinutes = ((lowIn+30) / 60) - (lowHours * 60);
+  display.print(lowHours);
   display.print("h ");
-  display.print(int((((tariff.startTimes[iLowestTariff] - currentTime) / 3600) - int((tariff.startTimes[iLowestTariff] - currentTime) / 3600)) * 60));
+  display.print(lowMinutes);
   display.println("m)");
 
   display.setTextColor(SCREEN_BLACK);
@@ -620,13 +687,13 @@ void drawGraph() {
   const int left = 0;
   const int top =  SCREEN_HEIGHT/2;
   const int w = SCREEN_WIDTH;
-  const int h = SCREEN_HEIGHT/2 - 15;
+  const int h = SCREEN_HEIGHT/2 - 25;
 
   //  display.drawLine(0, 15, 0, 63, SCREEN_BLACK);  // Draw Axes
   display.drawLine(left, top+h, w, top+h, SCREEN_BLACK);
   int i = 1;
   const Time currentTarriffTime = currentTime.roundDown();
-  const auto barCount = (tariff.startTimes[0] - currentTarriffTime) / Time::HalfHour;
+  const auto barCount = (tariff.startTimes[0] - currentTarriffTime + Time::HalfHour) /  + Time::HalfHour;
   const auto xCoeff = (w / barCount);
 
   while (i < w) {
@@ -649,13 +716,12 @@ void drawGraph() {
       const auto xCurrent = ((tariff.startTimes[i] - currentTarriffTime) / Time::HalfHour) * xCoeff;
       int color = colorForTarif( tariff.prices[i]);
       
-      const auto hTarrif = int(tariff.prices[i])*8;
+      const auto hTarrif = int(tariff.prices[i])*7;
       const auto yTarrif = top + (h - hTarrif);
 
       if (tariff.startTimes[i] == tariff.startTimes[iLowestTariff]) 
       { // Draw circle around the lowest tariff visible, to highlight it
         display.drawCircle(xCurrent + xCoeff/2, yTarrif-xCoeff/2, xCoeff/2, SCREEN_BLUE);
-        color = SCREEN_GREEN;
       }
       
       display.fillRect(
