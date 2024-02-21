@@ -152,7 +152,10 @@ static_assert(Price(1.1) == 1.1F);
 class Time
 {
 public:
-  static constexpr uint32_t HalfHour = 60 * 30; //half Hour in seconds (=1800)
+  static constexpr uint32_t Minute = 60; //Hour in seconds
+  static constexpr uint32_t Hour = Minute * 60; //Hour in seconds
+  static constexpr uint32_t HalfHour = Hour/2; //half Hour in seconds (=1800)
+  static constexpr uint32_t Day = Hour*24; //half Hour in seconds (=1800)
   static constexpr time_t EpochOffset = 1577836800LL; // time_t offset from 00:00 1-1-1970 to 00:00 1-1-2020
 
   struct Internal{};
@@ -172,9 +175,9 @@ public:
       return value_;
   }
  
-  Time roundUp( uint32_t toMul = HalfHour )  { return { ((value_ + (toMul-1)) / toMul) * toMul, Internal{} }; }  
-  Time round( uint32_t toMul = HalfHour)   { return { ((value_ + (toMul/2)) / toMul) * toMul, Internal{} }; }
-  Time roundDown( uint32_t toMul = HalfHour)  { return { (value_ / toMul) * toMul, Internal{} }; }
+  Time roundUp( uint32_t toMul = HalfHour ) const  { return { ((value_ + (toMul-1)) / toMul) * toMul, Internal{} }; }  
+  Time round( uint32_t toMul = HalfHour) const  { return { ((value_ + (toMul/2)) / toMul) * toMul, Internal{} }; }
+  Time roundDown( uint32_t toMul = HalfHour) const  { return { (value_ / toMul) * toMul, Internal{} }; }
 
 private:
     uint32_t value_;
@@ -203,7 +206,7 @@ uint8_t iHighestTariff = 0;  // to store lowest tariff & time slot present in av
 bool haveLocalTime = false;
 Time currentTime; //< CUrrent time in seconds since Epoch
 
-long int nextTarriffUpdate = 0;                  // used to store millis() of last tariff update
+long int nextTariffUpdate = 0;                  // used to store millis() of last tariff update
 const int tariffUpdateIntervalSec = 60 * 60 ;  // millis() between successive tariff updates from Octopus (3600000ms = 1h, 10800s = 3h, 14400s = 4h)
 const int tariffRetryIntervalSec = 30 ; //< Prevent API spamming for retries
 
@@ -254,7 +257,7 @@ void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info)
    {
       Serial.print("WiFi connect failed to: ");
       Serial.println(wifiSsid);  
-      nextTarriffUpdate += tariffRetryIntervalSec * 1000; //< Delay between retry on connection failure 
+      nextTariffUpdate += tariffRetryIntervalSec * 1000; //< Delay between retry on connection failure 
       WiFi.reconnect();
   }
 }
@@ -282,13 +285,20 @@ void WiFiStationStopped(WiFiEvent_t event, WiFiEventInfo_t info)
 //    Serial.printf("[WiFi-event] event: %d\n", event);
 //}
 
+const std::array<int,3> tariffThresholds = { 0, 10, 20 }; //< TODO: Dynamic thresholds
+const std::array<int,4> tariffColours = { SCREEN_BLUE, SCREEN_GREEN, SCREEN_ORANGE, SCREEN_RED }; //< TODO: Dynamic thresholds
+const int tariffYScale = 8;
+const std::array<int,3> tariffYIntervals = { tariffThresholds[0] * tariffYScale, tariffThresholds[1] * tariffYScale, tariffThresholds[2] * tariffYScale };
 
-int colorForTarif( float tarif )
+int colourForTariff( float tariff )
 {
-  if ( tarif < 0 ) return SCREEN_BLUE;
-  if ( tarif < 10 ) return SCREEN_GREEN;
-  if ( tarif < 20 ) return SCREEN_ORANGE;
-  return SCREEN_RED;
+  int i = 0;
+  for ( ; i < tariffThresholds.size(); ++i )
+  {
+    if ( tariff < tariffThresholds[i] )
+      break;
+  }
+  return tariffColours[i];
 }
 
 //
@@ -366,8 +376,8 @@ void setup() {
 void loop() {
   
     //TODO: Should use NTC clock for daily fetch
-  if (nextTarriffUpdate == 0 
-    || millis() >= nextTarriffUpdate )  // update Octopus tariff periodically
+  if (nextTariffUpdate == 0 
+    || millis() >= nextTariffUpdate )  // update Octopus tariff periodically
   {
     if ( WiFi.getMode() == WIFI_OFF )
     {    
@@ -385,7 +395,7 @@ void loop() {
 
       if ( tariff.numRecords != 0)  
       {
-        nextTarriffUpdate += tariffUpdateIntervalSec * 1000; //< Delay until next tarriff update
+        nextTariffUpdate += tariffUpdateIntervalSec * 1000; //< Delay until next tarriff update
         nextDisplayUpdate = millis(); //< Update display now 
         
       //Save power by diconnecting Wifi until next needed
@@ -394,7 +404,7 @@ void loop() {
       else
       {
         // Prevent API spamming on retries
-        nextTarriffUpdate += tariffRetryIntervalSec * 1000;
+        nextTariffUpdate += tariffRetryIntervalSec * 1000;
       }
     }
 
@@ -588,7 +598,11 @@ void Get_Octopus_Data()  // Get Octopus Data
         Serial.println(tariff.startTimes[i].to_time_t() );
 #endif
       }
-    
+
+#if 0 //TODO: testing tariffs!
+      tariff.prices[5] = -4.5f;
+#endif
+
       Serial.print("Got Tariff until ");
       Serial.println(tariff.startTimes[0].to_time_t() );
         
@@ -627,12 +641,24 @@ struct Time24
     uint8_t hour;
     uint8_t minute;
 
-    static Time24 fromSeconds( uint32_t seconds )
+    /** Duration as clock time HH:MM where the hours are not wrapped after 24 hours e.g. 35:59 for example for > 1 day
+    */
+    static Time24 fromSecondsDuration( uint32_t durationSeconds )
     {
-        const auto minutes = ((seconds + 30) / 60); //< Round to nearest minute
-        int hour = minutes / 60;
-        int minute = minute - (hour * 60);
+        const auto durationMinutes = ((durationSeconds + 30) / 60); //< Round to nearest minute
+        uint8_t hour = static_cast<uint8_t>(durationMinutes / 60);
+        uint8_t minute = static_cast<uint8_t>(durationMinutes - (hour * 60));
         return { hour, minute };
+    }
+
+    /** Duration as clock time HH:MM within the 24-hour clock period from 0:00 to 23:59
+    */
+    static Time24 fromSecondsTimepoint( uint32_t timepointSeconds )
+    {
+      auto t = fromSecondsDuration(timepointSeconds);
+      if ( t.hour >= 24 )
+        t.hour -= (t.hour/24) * 24; //< Wrap hour on 24 hour clock
+      return t;
     }
 };
 
@@ -657,17 +683,18 @@ void drawStats() {
   
   display.setCursor(0, 55); //< TODO: Why gfx isn;t working this out correctly!?
   display.setTextSize(2);
-  display.setTextColor( colorForTarif(tariff.prices[iCurrentTariff]));
+  display.setTextColor( colourForTariff(tariff.prices[iCurrentTariff]));
   display.print("Current = ");
   display.print(tariff.prices[iCurrentTariff]);
   display.println(" p");
   
+  display.setCursor(0, 80);
   display.setTextSize(1);
-  display.setTextColor( colorForTarif(tariff.prices[iHighestTariff]));
+  display.setTextColor( colourForTariff(tariff.prices[iHighestTariff]));
   display.print("Next High = ");
   display.print(tariff.prices[iHighestTariff]);
   display.print("p (In ");
-  const auto highIn = Time24::fromSeconds(tariff.startTimes[iHighestTariff] - currentTime);
+  const auto highIn = Time24::fromSecondsDuration(tariff.startTimes[iHighestTariff] - currentTime);
   display.print(highIn.hour);
   display.print("h ");
   display.print(highIn.minute);
@@ -677,7 +704,7 @@ void drawStats() {
   display.print("Next Low = ");
   display.print(tariff.prices[iLowestTariff]);
   display.print("p (In ");
-  const auto lowIn = Time24::fromSeconds(tariff.startTimes[iLowestTariff] - currentTime);
+  const auto lowIn = Time24::fromSecondsDuration(tariff.startTimes[iLowestTariff] - currentTime);
   display.print(lowIn.hour);
   display.print("h ");
   display.print(lowIn.minute);
@@ -702,8 +729,8 @@ void drawGraph() {
   //  display.drawLine(0, 15, 0, 63, SCREEN_BLACK);  // Draw Axes
   display.drawLine(left, top+h, w, top+h, SCREEN_BLACK);
   int i = 1;
-  const Time currentTarriffTime = currentTime.roundDown();
-  const auto barCount = (tariff.startTimes[0] - currentTarriffTime + Time::HalfHour) /  + Time::HalfHour;
+  const Time currentTariffTime = currentTime.roundDown();
+  const auto barCount = (tariff.startTimes[0] - currentTariffTime + Time::HalfHour) / Time::HalfHour;
   const auto xCoeff = (w / barCount);
 
   while (i < w) {
@@ -716,28 +743,68 @@ void drawGraph() {
   } 
     display.setFont(); //< default font
 
-  display.setCursor(0, top+h);
-  display.setTextSize(2);
-  display.print("Now");
+  const auto dayStart = currentTariffTime.roundDown( Time::Day );
 
+      const auto yTariff = top + h;
 // only plot future values
-  for (int i =0; i <= tariff.numRecords && currentTarriffTime <= tariff.startTimes[i]; ++i)
+  for (int i =0; i <= std::min(iCurrentTariff, tariff.numRecords); ++i)
    {
-      const auto xCurrent = ((tariff.startTimes[i] - currentTarriffTime) / Time::HalfHour) * xCoeff;
-      int color = colorForTarif( tariff.prices[i]);
-      
-      const auto hTarrif = int(tariff.prices[i])*7;
-      const auto yTarrif = top + (h - hTarrif);
+      const auto xCurrent = ((tariff.startTimes[i] - currentTariffTime) / Time::HalfHour) * xCoeff;
+      const int colour = colourForTariff( tariff.prices[i]);      
+      const auto hTariff = int(tariff.prices[i] * tariffYScale);
 
-      if (tariff.startTimes[i] == tariff.startTimes[iLowestTariff]) 
-      { // Draw circle around the lowest tariff visible, to highlight it
-        display.drawCircle(xCurrent + xCoeff/2, yTarrif-xCoeff/2, xCoeff/2, SCREEN_BLUE);
+      int previousY = 0;
+      for ( int iY = 0; iY <= tariffYIntervals.size(); ++iY )
+      {
+          bool isAtTariff = iY == tariffYIntervals.size() || tariff.prices[i] < tariffThresholds[iY] ;
+          const auto nextY = isAtTariff ? hTariff : tariffYIntervals[iY];
+          if ( !isAtTariff && nextY == previousY ) continue;
+
+          display.fillRect(
+                xCurrent+1
+              , yTariff - nextY
+              , xCoeff-2
+              , nextY - previousY, tariffColours[iY]); //< or `colour` to not have intervals
+              
+          if ( isAtTariff )
+          {           
+            //Add central spine of tarriff-colour over the lower intervals
+            display.fillRect(
+                  xCurrent+3
+                , yTariff-previousY
+                , xCoeff-6
+                , previousY, colour);
+                
+            break;
+          }
+
+          previousY = nextY;
       }
       
-      display.fillRect(
-            xCurrent
-          , yTarrif
-          , xCoeff-2
-          , hTarrif, color);
     }
+
+    
+    if ( iLowestTariff != -1 ) 
+    { // Draw triangle above the lowest tariff visible, to highlight it
+      
+      const auto xCurrent = ((tariff.startTimes[iLowestTariff] - currentTariffTime) / Time::HalfHour) * xCoeff;
+      const auto hTariff = int(tariff.prices[iLowestTariff] * tariffYScale);
+        const auto yMarker = yTariff - ((hTariff > 0) ? hTariff : 0 ) ;
+        display.setTextColor(SCREEN_GREEN, SCREEN_WHITE);
+        
+        const auto lowTime = Time24::fromSecondsTimepoint(tariff.startTimes[iLowestTariff] - dayStart);
+            
+        display.setCursor(xCurrent-xCoeff/2, yMarker-xCoeff*2 - 20);
+        display.setTextSize(2);
+        display.print(lowTime.hour);
+        display.print(':');
+        if ( lowTime.minute < 10 ) display.print('0');
+        display.print(lowTime.minute);
+        
+        display.fillTriangle(
+            xCurrent-xCoeff/2, yMarker-xCoeff*2
+          , xCurrent+xCoeff/2, yMarker-xCoeff*2
+          , xCurrent, yMarker-2, SCREEN_BLUE);
+        //display.drawCircle(xCurrent + xCoeff/2, yTariff-hTariff-xCoeff/2, xCoeff/2, SCREEN_BLUE);
+      }
 }
