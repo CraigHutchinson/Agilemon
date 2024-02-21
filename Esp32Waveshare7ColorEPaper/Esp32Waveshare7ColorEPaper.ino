@@ -429,10 +429,9 @@ void loop() {
       Serial.print("Number of Octopus Tariff Records = ");
       Serial.println(tariff.numRecords);
 
-      int i = 0;
-
       iCurrentTariff = iLowestTariff = iHighestTariff = 0;
-      while (i < tariff.numRecords) {
+      for (int i = 0; i < tariff.numRecords; ++i )
+      {
         if ( tariff.startTimes[i] > currentTime)  // find lowest published tariff beyond present one
         {          
           if (tariff.prices[i] < tariff.prices[iLowestTariff])
@@ -445,22 +444,20 @@ void loop() {
             iHighestTariff = i;  // find highest tariff present in available data
           }
         }
-        else
-        if ((currentTime > tariff.startTimes[i]) && ((currentTime - tariff.startTimes[i]) < Time::HalfHour)) 
+        else // This will be the current time
         {
           iCurrentTariff = i;
-
-          Serial.print("Current Tariff is ");          
-          Serial.print(tariff.prices[iCurrentTariff], 2);
-          Serial.print("p (Record #");
-          Serial.print(i);
-          Serial.println(")");
-
-          break; //< DOn't process the past...
+          break; //< Don't process past tariffs
         }
-        i++;
       }
-                      
+
+
+      Serial.print("Current Tariff is ");
+      Serial.print(tariff.prices[iCurrentTariff], 2);
+      Serial.print("p (Record #");
+      Serial.print(iCurrentTariff);
+      Serial.println(")");
+
       Serial.print("Lowest Future Tariff Published = ");
       Serial.println(tariff.prices[iLowestTariff]);
       Serial.print("Time to Lowest Tariff is ");
@@ -551,7 +548,7 @@ void Get_Octopus_Data()  // Get Octopus Data
       line += client.readString();
       delay(500); //< Must be better way to know more data is to come...
     }
-    while( client.connected() && client.available() ); //< While connected and more data to be received
+    while( client.connected() /* && client.available()*/ ); //< While connected and more data to be received
 
     client.stop();
 
@@ -622,6 +619,23 @@ void printLocalTime() {
 //  display.print(&timeinfo, "%A, %B %d %Y %H:%M:%S");
 }
 */
+
+/** 24-hour clock time as HH:MM
+*/
+struct Time24
+{
+    uint8_t hour;
+    uint8_t minute;
+
+    static Time24 fromSeconds( uint32_t seconds )
+    {
+        const auto minutes = ((seconds + 30) / 60); //< Round to nearest minute
+        int hour = minutes / 60;
+        int minute = minute - (hour * 60);
+        return { hour, minute };
+    }
+};
+
 void drawStats() {
     
   Serial.print("Updating display...");
@@ -653,24 +667,20 @@ void drawStats() {
   display.print("Next High = ");
   display.print(tariff.prices[iHighestTariff]);
   display.print("p (In ");
-  const auto highIn = tariff.startTimes[iHighestTariff] - currentTime;
-  int highHours = highIn / (60*60);
-  int highMinutes = ((highIn+30) / 60) - (highHours * 60);
-  display.print(highHours);
+  const auto highIn = Time24::fromSeconds(tariff.startTimes[iHighestTariff] - currentTime);
+  display.print(highIn.hour);
   display.print("h ");
-  display.print(highMinutes);
+  display.print(highIn.minute);
   display.println("m)");
 
-  display.setTextColor( SCREEN_GREEN );//colorForTarif(tariff.prices[iHighestTariff]));
+  display.setTextColor( SCREEN_GREEN );
   display.print("Next Low = ");
   display.print(tariff.prices[iLowestTariff]);
   display.print("p (In ");
-  const auto lowIn = tariff.startTimes[iLowestTariff] - currentTime;
-  int lowHours = lowIn / (60*60);
-  int lowMinutes = ((lowIn+30) / 60) - (lowHours * 60);
-  display.print(lowHours);
+  const auto lowIn = Time24::fromSeconds(tariff.startTimes[iLowestTariff] - currentTime);
+  display.print(lowIn.hour);
   display.print("h ");
-  display.print(lowMinutes);
+  display.print(lowIn.minute);
   display.println("m)");
 
   display.setTextColor(SCREEN_BLACK);
