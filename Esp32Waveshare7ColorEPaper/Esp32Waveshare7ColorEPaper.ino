@@ -718,10 +718,10 @@ void timeavailable(struct timeval* t) {
 
 
 
-void drawTariffMarker( const Time dayStart, const Time currentTariffTime, uint xCoeff, uint yTariff
+void drawTariffMarker( const Time dayEpoch, uint xCoeff, uint yTariff
     , int iTariff, int colour)
 {
-    const auto xCurrent = ((tariff.startTimes[iTariff] - currentTariffTime) / Time::HalfHour) * xCoeff;
+    const auto xCurrent = (iCurrentTariff - iTariff) * xCoeff;
     const auto hTariff = int(tariff.prices[iTariff] * tariffYScale);
     const auto yMarker = yTariff - ((hTariff > 0) ? hTariff : 0);
 
@@ -730,7 +730,7 @@ void drawTariffMarker( const Time dayStart, const Time currentTariffTime, uint x
     display.setTextSize(1);
     display.setTextColor(colour, SCREEN_WHITE);
 
-    const auto lowTime = Time24::fromSecondsTimepoint(tariff.startTimes[iTariff] - dayStart);
+    const auto lowTime = Time24::fromSecondsTimepoint(tariff.startTimes[iTariff] - dayEpoch);
 
     display.setCursor(xCurrent - xCoeff / 2, yMarker - xCoeff * 2 - 4); //< NOTE: 4 pixel spacing for text from marker
     
@@ -756,7 +756,7 @@ void drawGraph() {
     display.drawLine(left, top + h, w, top + h, SCREEN_BLACK);
     int i = 1;
     const Time currentTariffTime = currentTime.roundDown();
-    const Time dayStart = currentTariffTime.roundDown(Time::Day);
+    const Time dayEpoch = currentTariffTime.roundDown(Time::Day);
 
     const auto barCount = (tariff.startTimes[0] - currentTariffTime + Time::HalfHour) / Time::HalfHour;
     const auto xCoeff = (w / barCount);
@@ -777,7 +777,7 @@ void drawGraph() {
     // only plot future values
     for (int i = 0; i <= std::min(iCurrentTariff, tariff.numRecords); ++i)
     {
-        const auto xCurrent = ((tariff.startTimes[i] - currentTariffTime) / Time::HalfHour) * xCoeff;
+        const auto xCurrent = (iCurrentTariff-i) * xCoeff;
         const int colour = colourForTariff(tariff.prices[i]);
         const auto hTariff = int(tariff.prices[i] * tariffYScale);
 
@@ -815,11 +815,11 @@ void drawGraph() {
     if (iLowestTariff != -1)
     { 
         // Draw triangle above the lowest tariff visible, to highlight it
-        drawTariffMarker(dayStart, currentTariffTime, xCoeff, yTariff, iLowestTariff, SCREEN_GREEN);
+        drawTariffMarker(dayEpoch, xCoeff, yTariff, iLowestTariff, SCREEN_GREEN);
     }
     if (iHighestTariff != -1)
     {
         // Draw triangle above the lowest tariff visible, to highlight it
-        drawTariffMarker(dayStart, currentTariffTime, xCoeff, yTariff, iHighestTariff, SCREEN_RED);
+        drawTariffMarker(dayEpoch,  xCoeff, yTariff, iHighestTariff, SCREEN_RED);
     }
 }
