@@ -548,15 +548,11 @@ void Get_Octopus_Data()  // Get Octopus Data
     //Await receipt of data
     while( client.connected() && !client.available() );
     
-    
-    delay(500); //< Must be better way to know more data is to come...
-
     // Wait for data bytes to be received
     String line;
     do
     {
       line += client.readString();
-      delay(500); //< Must be better way to know more data is to come...
     }
     while( client.connected() /* && client.available()*/ ); //< While connected and more data to be received
 
@@ -691,24 +687,24 @@ void drawStats() {
   display.setCursor(0, 80);
   display.setTextSize(1);
   display.setTextColor( colourForTariff(tariff.prices[iHighestTariff]));
-  display.print("Next High = ");
+  display.print("High ");
   display.print(tariff.prices[iHighestTariff]);
-  display.print("p (In ");
+  display.print("p in ");
   const auto highIn = Time24::fromSecondsDuration(tariff.startTimes[iHighestTariff] - currentTime);
   display.print(highIn.hour);
   display.print("h ");
   display.print(highIn.minute);
-  display.println("m)");
+  display.println("m");
 
   display.setTextColor( SCREEN_GREEN );
-  display.print("Next Low = ");
+  display.print("Low ");
   display.print(tariff.prices[iLowestTariff]);
-  display.print("p (In ");
+  display.print("p in ");
   const auto lowIn = Time24::fromSecondsDuration(tariff.startTimes[iLowestTariff] - currentTime);
   display.print(lowIn.hour);
   display.print("h ");
   display.print(lowIn.minute);
-  display.println("m)");
+  display.println("m");
 
   display.setTextColor(SCREEN_BLACK);
 }
@@ -719,92 +715,111 @@ void timeavailable(struct timeval* t) {
   haveLocalTime = true;
   //  printLocalTime();
 }
-//
-void drawGraph() {
-  const int left = 0;
-  const int top =  SCREEN_HEIGHT/2;
-  const int w = SCREEN_WIDTH;
-  const int h = SCREEN_HEIGHT/2 - 25;
 
-  //  display.drawLine(0, 15, 0, 63, SCREEN_BLACK);  // Draw Axes
-  display.drawLine(left, top+h, w, top+h, SCREEN_BLACK);
-  int i = 1;
-  const Time currentTariffTime = currentTime.roundDown();
-  const auto barCount = (tariff.startTimes[0] - currentTariffTime + Time::HalfHour) / Time::HalfHour;
-  const auto xCoeff = (w / barCount);
 
-  while (i < w) {
-    if (i % xCoeff == 0) {
-      display.drawPixel(i, top+ h/2 + 10, SCREEN_BLACK);  // Draw grid line at 10p intervals
-      display.drawPixel(i, top+ h/2, SCREEN_BLACK);
-      display.drawPixel(i, top+ h/2 - 10, SCREEN_BLACK);
-    }
-    i++;
-  } 
-    display.setFont(); //< default font
 
-  const auto dayStart = currentTariffTime.roundDown( Time::Day );
+void drawTariffMarker( const Time dayStart, const Time currentTariffTime, uint xCoeff, uint yTariff
+    , int iTariff, int colour)
+{
+    const auto xCurrent = ((tariff.startTimes[iTariff] - currentTariffTime) / Time::HalfHour) * xCoeff;
+    const auto hTariff = int(tariff.prices[iTariff] * tariffYScale);
+    const auto yMarker = yTariff - ((hTariff > 0) ? hTariff : 0);
 
-      const auto yTariff = top + h;
-// only plot future values
-  for (int i =0; i <= std::min(iCurrentTariff, tariff.numRecords); ++i)
-   {
-      const auto xCurrent = ((tariff.startTimes[i] - currentTariffTime) / Time::HalfHour) * xCoeff;
-      const int colour = colourForTariff( tariff.prices[i]);      
-      const auto hTariff = int(tariff.prices[i] * tariffYScale);
-
-      int previousY = 0;
-      for ( int iY = 0; iY <= tariffYIntervals.size(); ++iY )
-      {
-          bool isAtTariff = iY == tariffYIntervals.size() || tariff.prices[i] < tariffThresholds[iY] ;
-          const auto nextY = isAtTariff ? hTariff : tariffYIntervals[iY];
-          if ( !isAtTariff && nextY == previousY ) continue;
-
-          display.fillRect(
-                xCurrent+1
-              , yTariff - nextY
-              , xCoeff-2
-              , nextY - previousY, tariffColours[iY]); //< or `colour` to not have intervals
-              
-          if ( isAtTariff )
-          {           
-            //Add central spine of tarriff-colour over the lower intervals
-            display.fillRect(
-                  xCurrent+3
-                , yTariff-previousY
-                , xCoeff-6
-                , previousY, colour);
-                
-            break;
-          }
-
-          previousY = nextY;
-      }
       
-    }
+    display.setFont(&FreeMonoBoldOblique12pt7b);    
+    display.setTextSize(1);
+    display.setTextColor(colour, SCREEN_WHITE);
 
+    const auto lowTime = Time24::fromSecondsTimepoint(tariff.startTimes[iTariff] - dayStart);
+
+    display.setCursor(xCurrent - xCoeff / 2, yMarker - xCoeff * 2 - 4); //< NOTE: 4 pixel spacing for text from marker
     
-    if ( iLowestTariff != -1 ) 
-    { // Draw triangle above the lowest tariff visible, to highlight it
-      
-      const auto xCurrent = ((tariff.startTimes[iLowestTariff] - currentTariffTime) / Time::HalfHour) * xCoeff;
-      const auto hTariff = int(tariff.prices[iLowestTariff] * tariffYScale);
-        const auto yMarker = yTariff - ((hTariff > 0) ? hTariff : 0 ) ;
-        display.setTextColor(SCREEN_GREEN, SCREEN_WHITE);
-        
-        const auto lowTime = Time24::fromSecondsTimepoint(tariff.startTimes[iLowestTariff] - dayStart);
-            
-        display.setCursor(xCurrent-xCoeff/2, yMarker-xCoeff*2 - 20);
-        display.setTextSize(2);
-        display.print(lowTime.hour);
-        display.print(':');
-        if ( lowTime.minute < 10 ) display.print('0');
-        display.print(lowTime.minute);
-        
-        display.fillTriangle(
-            xCurrent-xCoeff/2, yMarker-xCoeff*2
-          , xCurrent+xCoeff/2, yMarker-xCoeff*2
-          , xCurrent, yMarker-2, SCREEN_BLUE);
-        //display.drawCircle(xCurrent + xCoeff/2, yTariff-hTariff-xCoeff/2, xCoeff/2, SCREEN_BLUE);
-      }
+    display.print(lowTime.hour);
+    display.print(':');
+    if (lowTime.minute < 10) display.print('0');
+    display.print(lowTime.minute);
+
+    display.fillTriangle(
+        xCurrent - xCoeff / 2, yMarker - xCoeff * 2
+        , xCurrent + xCoeff / 2, yMarker - xCoeff * 2
+        , xCurrent, yMarker - 2, SCREEN_BLUE);
+
+}
+
+void drawGraph() {
+    const int left = 0;
+    const int top = SCREEN_HEIGHT / 2;
+    const int w = SCREEN_WIDTH;
+    const int h = SCREEN_HEIGHT / 2 - 25;
+
+    //  display.drawLine(0, 15, 0, 63, SCREEN_BLACK);  // Draw Axes
+    display.drawLine(left, top + h, w, top + h, SCREEN_BLACK);
+    int i = 1;
+    const Time currentTariffTime = currentTime.roundDown();
+    const Time dayStart = currentTariffTime.roundDown(Time::Day);
+
+    const auto barCount = (tariff.startTimes[0] - currentTariffTime + Time::HalfHour) / Time::HalfHour;
+    const auto xCoeff = (w / barCount);
+
+#if 0
+    while (i < w) {
+        if (i % xCoeff == 0) {
+            display.drawPixel(i, top + h / 2 + 10, SCREEN_BLACK);  // Draw grid line at 10p intervals
+            display.drawPixel(i, top + h / 2, SCREEN_BLACK);
+            display.drawPixel(i, top + h / 2 - 10, SCREEN_BLACK);
+        }
+        i++;
+    }
+    //display.setFont(); //< default font
+#endif
+
+    const auto yTariff = top + h;
+    // only plot future values
+    for (int i = 0; i <= std::min(iCurrentTariff, tariff.numRecords); ++i)
+    {
+        const auto xCurrent = ((tariff.startTimes[i] - currentTariffTime) / Time::HalfHour) * xCoeff;
+        const int colour = colourForTariff(tariff.prices[i]);
+        const auto hTariff = int(tariff.prices[i] * tariffYScale);
+
+        int previousY = 0;
+        for (int iY = 0; iY <= tariffYIntervals.size(); ++iY)
+        {
+            bool isAtTariff = iY == tariffYIntervals.size() || tariff.prices[i] < tariffThresholds[iY];
+            const auto nextY = isAtTariff ? hTariff : tariffYIntervals[iY];
+            if (!isAtTariff && nextY == previousY) continue;
+
+            display.fillRect(
+                xCurrent + 1
+                , yTariff - nextY
+                , xCoeff - 2
+                , nextY - previousY, tariffColours[iY]); //< or `colour` to not have intervals
+
+            if (isAtTariff)
+            {
+                //Add central spine of tarriff-colour over the lower intervals
+                display.fillRect(
+                    xCurrent + 3
+                    , yTariff - previousY
+                    , xCoeff - 6
+                    , previousY, colour);
+
+                break;
+            }
+
+            previousY = nextY;
+        }
+
+    }
+
+
+    if (iLowestTariff != -1)
+    { 
+        // Draw triangle above the lowest tariff visible, to highlight it
+        drawTariffMarker(dayStart, currentTariffTime, xCoeff, yTariff, iLowestTariff, SCREEN_GREEN);
+    }
+    if (iHighestTariff != -1)
+    {
+        // Draw triangle above the lowest tariff visible, to highlight it
+        drawTariffMarker(dayStart, currentTariffTime, xCoeff, yTariff, iHighestTariff, SCREEN_RED);
+    }
 }
