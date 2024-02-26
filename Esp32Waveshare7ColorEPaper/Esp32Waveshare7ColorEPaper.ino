@@ -692,18 +692,20 @@ void drawStats() {
   display.setCursor(0, 55); //< TODO: Why gfx isn;t working this out correctly!?
   display.setTextSize(2);
   display.setTextColor( colourForTariff(tariff.prices[iCurrentTariff]));
-  display.print("Current = ");
+  display.print("Now ");
   // We should always have future data so this is used as an error!
   if ( iCurrentTariff != 0 )
   {
     display.print(tariff.prices[iCurrentTariff]);
-    display.println(" p");
+    display.setTextSize(1);
+    display.println("p");
   }
   else
   {
     display.print("{{ERROR}}");
   }
   
+#if 0
   display.setCursor(0, 80);
   display.setTextSize(1);
   display.setTextColor( colourForTariff(tariff.prices[iHighestTariff]));
@@ -725,6 +727,7 @@ void drawStats() {
   display.print("h ");
   display.print(lowIn.minute);
   display.println("m");
+#endif
 
   display.setTextColor(SCREEN_BLACK);
 }
@@ -736,7 +739,26 @@ void timeavailable(struct timeval* t) {
   //  printLocalTime();
 }
 
+//TODO: impl properly
+struct BoxX
+{
+  int16_t x;
+  uint16_t w; 
+  uint16_t h;
+};
 
+static struct BoxX centerAlignText( const char* text, uint16_t xCenter )
+{
+  int16_t x = 0, y = 0;
+  uint16_t w = 0, h = 0;
+  display.getTextBounds( text, 0, 0, &x, &y, &w, &h );
+  const uint16_t halfWidth = w/2;
+  const int16_t xText = (xCenter <= halfWidth ) ? 0 //< Clamp to left border
+                  : (xCenter >= SCREEN_WIDTH-halfWidth ) ? SCREEN_WIDTH-halfWidth //< Clamp to right border
+                  : xCenter - halfWidth; //< Center align
+
+  return {xText, w, h};
+}
 
 void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
     , int iTariff, int colour)
@@ -745,35 +767,53 @@ void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
     const auto xCurrent = (iCurrentTariff - iTariff) * xCoeff;
     const auto hTariff = int(tariff.prices[iTariff] * tariffYScale);
     const auto yMarker = yTariff - ((hTariff > 0) ? hTariff : 0);
-
-      
-    display.setFont(&FreeSansBold12pt7b);    
+   
     display.setTextSize(1);
     display.setTextColor(colour, SCREEN_WHITE);
 
-    const auto lowTime = Time24::fromSecondsTimepoint(tariff.startTimes[iTariff] - currentDayStart);
+    const auto time24 = Time24::fromSecondsTimepoint(tariff.startTimes[iTariff] - currentDayStart);
 
+    // Pad between marker and text and text lines
+    const auto lineSpacing = 3;
+    auto yCursor = yMarker - markerHeight - lineSpacing;
     
-    char text[128];
+    char text[64];
+
     snprintf( text, sizeof(text), "%u:%02u"
-      , lowTime.hour
-      , lowTime.minute );
+      , time24.hour
+      , time24.minute );
+    {
+        display.setFont(&FreeSans9pt7b); 
+        auto  pos = centerAlignText( text, xCurrent );
+        display.setCursor( pos.x, yCursor );
+        display.print(text);
+        yCursor -= pos.h + lineSpacing;
+    }
+    
+    const auto tarriffIn = Time24::fromSecondsDuration(tariff.startTimes[iTariff] - currentTime);      
+    snprintf( text, sizeof(text), "%uh %02um"
+      , tarriffIn.hour
+      , tarriffIn.minute );
+    {
+      display.setFont(&FreeSansBold12pt7b); 
+      auto pos = centerAlignText( text, xCurrent );
+      display.setCursor( pos.x, yCursor );
+      display.print(text);
+      yCursor -= pos.h + lineSpacing;
+    }
 
-    int16_t x = 0, y = 0;
-    uint16_t w = 0, h = 0;
-    display.getTextBounds( text, 0, 0, &x, &y, &w, &h );
-  const uint16_t halfWidth = w/2;
-
-  const auto xText = (xCurrent <= halfWidth ) ? 0 //< Clamp to left border
-                   : (xCurrent >= SCREEN_WIDTH-halfWidth ) ? SCREEN_WIDTH-halfWidth //< Clamp to right border
-                   : xCurrent - halfWidth; //< Center align
-
-    // Pad between marker and text
-    const auto pad = 4;
-
-    display.setCursor( xText, yMarker - markerHeight - pad );
-
-    display.print(text);
+    snprintf( text, sizeof(text), "%.2f"
+      , (float)tariff.prices[iTariff] );
+    {
+      display.setFont(&FreeSansBold12pt7b); 
+      display.setTextSize(2);
+      auto pos = centerAlignText( text, xCurrent );
+      display.setCursor( pos.x, yCursor );
+      display.print(text);
+      display.setTextSize(1);
+      display.print("p"); //< Small 'p'
+      yCursor -= pos.h + lineSpacing;
+    }
 
     display.fillTriangle(
          xCurrent - xCoeff / 2, yMarker - markerHeight
