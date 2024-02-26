@@ -1,8 +1,9 @@
-
 #include <WiFi.h>
 #include "time.h"
 #include <esp_sntp.h>
 #include <WiFiClientSecure.h>
+#include <esp_crt_bundle.h>
+#include <ssl_client.h>
 #include <ArduinoJson.h>
 #include <SPI.h>
 #include <Wire.h>
@@ -11,8 +12,8 @@
 #include <algorithm> //< std::clamp
 
 //https://learn.adafruit.com/adafruit-gfx-graphics-library/using-fonts
-#include <Fonts/FreeMonoBoldOblique12pt7b.h>
-#include <Fonts/FreeSerif9pt7b.h>
+#include <Fonts/FreeSansBold12pt7b.h>
+#include <Fonts/FreeSans9pt7b.h>
 #include "Adafruit_4_01_ColourEPaper.h"
 
 const char firmwareDate[] = "07/02/2024";
@@ -190,7 +191,11 @@ private:
 //
 struct Tariff
 {
-    static constexpr uint8_t MaxRecords = 100;
+  
+    // Next day is published between 1600-2000 for the next "24-hour period" but actually until 22:30 the next day
+    // 23 + (24 - 16) = 31 hours = 62 halfHours 
+    // @note We round upto 64 as a resounable safe count
+    static constexpr uint8_t MaxRecords = 64;
 
     Time startTimes[MaxRecords];
     Price prices[MaxRecords];
@@ -287,7 +292,7 @@ void WiFiStationStopped(WiFiEvent_t event, WiFiEventInfo_t info)
 
 const std::array<int,3> tariffThresholds = { 0, 10, 20 }; //< TODO: Dynamic thresholds
 const std::array<int,4> tariffColours = { SCREEN_BLUE, SCREEN_GREEN, SCREEN_ORANGE, SCREEN_RED }; //< TODO: Dynamic thresholds
-const int tariffYScale = 8;
+const int tariffYScale = 7;
 const std::array<int,3> tariffYIntervals = { tariffThresholds[0] * tariffYScale, tariffThresholds[1] * tariffYScale, tariffThresholds[2] * tariffYScale };
 
 int colourForTariff( float tariff )
@@ -316,6 +321,8 @@ void setup() {
   {
     
     display.cp437(true); //< Use correct character tables
+    display.setTextWrap(false); 
+    
     if ( !display.begin(SCLK_PIN, DIN_PIN, CS_PIN)) {
       Serial.println(F("ePaper allocation failed"));
       for (;;);  // Don't proceed, loop forever
@@ -515,8 +522,13 @@ void Get_Octopus_Data()  // Get Octopus Data
   } else {
     Serial.println("Connected to server!");
     
+
+
     // Make a HTTP request:
-    client.println("GET https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-J/standard-unit-rates/?page_size=60 HTTP/1.1");
+    client.print("GET https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-J/standard-unit-rates/?page_size=");
+    client.print(Tariff::MaxRecords);
+    //TODO: Could use a 48-sample buffer and `period_from={Now}` in ISO 8601 date format e.g. "2018-05-17T16:00:00Z"
+    client.println(" HTTP/1.1");
     client.println("Host: api.octopus.energy");
     client.println(auth_string); // enter Octopus authorisation string, collected from secrets.h
     client.println("Connection: close");
@@ -671,18 +683,26 @@ void drawStats() {
   //
   //Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
   
-  display.setFont(&FreeMonoBoldOblique12pt7b);    
+  display.setFont(&FreeSansBold12pt7b);
   display.setTextSize(1);
   display.setTextColor(SCREEN_BLACK);
-  display.setCursor(0, 15);
+  display.setCursor(0, 16);
   display.println(&timeinfo, "%A, %B %d @ %H:%M:%S");
   
   display.setCursor(0, 55); //< TODO: Why gfx isn;t working this out correctly!?
   display.setTextSize(2);
   display.setTextColor( colourForTariff(tariff.prices[iCurrentTariff]));
   display.print("Current = ");
-  display.print(tariff.prices[iCurrentTariff]);
-  display.println(" p");
+  // We should always have future data so this is used as an error!
+  if ( iCurrentTariff != 0 )
+  {
+    display.print(tariff.prices[iCurrentTariff]);
+    display.println(" p");
+  }
+  else
+  {
+    display.print("{{ERROR}}");
+  }
   
   display.setCursor(0, 80);
   display.setTextSize(1);
@@ -718,30 +738,46 @@ void timeavailable(struct timeval* t) {
 
 
 
-void drawTariffMarker( const Time dayEpoch, uint xCoeff, uint yTariff
+void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
     , int iTariff, int colour)
 {
+    const auto markerHeight = 7;
     const auto xCurrent = (iCurrentTariff - iTariff) * xCoeff;
     const auto hTariff = int(tariff.prices[iTariff] * tariffYScale);
     const auto yMarker = yTariff - ((hTariff > 0) ? hTariff : 0);
 
       
-    display.setFont(&FreeMonoBoldOblique12pt7b);    
+    display.setFont(&FreeSansBold12pt7b);    
     display.setTextSize(1);
     display.setTextColor(colour, SCREEN_WHITE);
 
-    const auto lowTime = Time24::fromSecondsTimepoint(tariff.startTimes[iTariff] - dayEpoch);
+    const auto lowTime = Time24::fromSecondsTimepoint(tariff.startTimes[iTariff] - currentDayStart);
 
-    display.setCursor(xCurrent - xCoeff / 2, yMarker - xCoeff * 2 - 4); //< NOTE: 4 pixel spacing for text from marker
     
-    display.print(lowTime.hour);
-    display.print(':');
-    if (lowTime.minute < 10) display.print('0');
-    display.print(lowTime.minute);
+    char text[128];
+    snprintf( text, sizeof(text), "%u:%02u"
+      , lowTime.hour
+      , lowTime.minute );
+
+    int16_t x = 0, y = 0;
+    uint16_t w = 0, h = 0;
+    display.getTextBounds( text, 0, 0, &x, &y, &w, &h );
+  const uint16_t halfWidth = w/2;
+
+  const auto xText = (xCurrent <= halfWidth ) ? 0 //< Clamp to left border
+                   : (xCurrent >= SCREEN_WIDTH-halfWidth ) ? SCREEN_WIDTH-halfWidth //< Clamp to right border
+                   : xCurrent - halfWidth; //< Center align
+
+    // Pad between marker and text
+    const auto pad = 4;
+
+    display.setCursor( xText, yMarker - markerHeight - pad );
+
+    display.print(text);
 
     display.fillTriangle(
-        xCurrent - xCoeff / 2, yMarker - xCoeff * 2
-        , xCurrent + xCoeff / 2, yMarker - xCoeff * 2
+         xCurrent - xCoeff / 2, yMarker - markerHeight
+        , xCurrent + xCoeff / 2, yMarker - markerHeight
         , xCurrent, yMarker - 2, SCREEN_BLUE);
 
 }
@@ -755,12 +791,12 @@ void drawGraph() {
     //  display.drawLine(0, 15, 0, 63, SCREEN_BLACK);  // Draw Axes
     display.drawLine(left, top + h, w, top + h, SCREEN_BLACK);
     int i = 1;
-    const Time currentTariffTime = currentTime.roundDown();
-    const Time dayEpoch = currentTariffTime.roundDown(Time::Day);
+    const Time currentTariffTime = currentTime.roundDown(Time::HalfHour);
+    const Time currentDayStart = currentTariffTime.roundDown(Time::Day);
 
     const auto barCount = (tariff.startTimes[0] - currentTariffTime + Time::HalfHour) / Time::HalfHour;
-    const auto xCoeff = (w / barCount);
-
+    const auto xCoeff = (w + (barCount/2)) / barCount;
+    //const auto maxCount = (w + (xCoeff-1)) /xCoeff;
 #if 0
     while (i < w) {
         if (i % xCoeff == 0) {
@@ -808,18 +844,41 @@ void drawGraph() {
 
             previousY = nextY;
         }
-
     }
+    
+    /// X-Axis hour markers    
+    const auto currentHourEnd = currentTime.roundUp(Time::Hour);
+    const auto timetoHourEnd = currentHourEnd - currentTariffTime;
 
+    const auto iFirstHour = iCurrentTariff - (timetoHourEnd / Time::HalfHour);
+    const uint8_t firstHour = (currentHourEnd - currentDayStart) / Time::Hour;
+
+    display.setFont(&FreeSans9pt7b);    
+    display.setTextSize(1);
+    display.setTextColor(SCREEN_BLACK);
+
+    const auto iHourMarkerBase = iCurrentTariff-iFirstHour;
+    const auto hourCount = (iCurrentTariff-1)/2;
+    for (int iHour = 0; iHour <= hourCount; ++iHour)
+    {
+        const auto xCurrent = (iHourMarkerBase + iHour*2) * xCoeff;
+        
+        display.drawFastVLine( xCurrent, top + h, 7, SCREEN_BLACK  );
+        display.drawFastVLine( xCurrent+1, top + h, 7, SCREEN_BLACK  );
+
+        const uint8_t hourValue = (firstHour + iHour) % 24;
+        display.setCursor( xCurrent - (hourValue >= 10 ? 8 : 4), top + h + 20 );
+        display.print( hourValue );
+    }
 
     if (iLowestTariff != -1)
     { 
         // Draw triangle above the lowest tariff visible, to highlight it
-        drawTariffMarker(dayEpoch, xCoeff, yTariff, iLowestTariff, SCREEN_GREEN);
+        drawTariffMarker(currentDayStart, xCoeff, yTariff, iLowestTariff, SCREEN_GREEN);
     }
     if (iHighestTariff != -1)
     {
         // Draw triangle above the lowest tariff visible, to highlight it
-        drawTariffMarker(dayEpoch,  xCoeff, yTariff, iHighestTariff, SCREEN_RED);
+        drawTariffMarker(currentDayStart,  xCoeff, yTariff, iHighestTariff, SCREEN_RED);
     }
 }
