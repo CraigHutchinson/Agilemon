@@ -82,7 +82,6 @@ Adafruit_4_01_ColourEPaper display(
 //
 void printTime(time_t timeToPrint);  // Print time to serial monitor
 void Get_Octopus_Data();             // Get Octopus Data
-//void printLocalTime();
 void timeavailable(struct timeval* t);  // Callback function (get's called when time adjusts via NTP)
 void drawStats();                      // Routine Refresh of Display
 void drawGraph();                       // Draw tariff graph
@@ -92,10 +91,11 @@ const char* ntpServer1 = "pool.ntp.org";
 const char* ntpServer2 = "time.nist.gov";
 const long gmtOffset_sec = 0;
 const int daylightOffset_sec = 0;
-const char* time_zone = "CET-1CEST,M3.5.0,M10.5.0/3";  // TimeZone rule for Europe/Rome including daylight adjustment rules (optional)
-//
+
+// @todo Othwr time zones can be defined from: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
+const char* posixTimeZone = "GMT0BST,M3.5.0/1,M10.5.0";// Time Zone as "Europe/London"	
+
 // Cert for Octopus
-//
 const char* octopus =
   "-----BEGIN CERTIFICATE-----\n"
   "MIIEdTCCA12gAwIBAgIJAKcOSkw0grd/MA0GCSqGSIb3DQEBCwUAMGgxCzAJBgNV\n"
@@ -161,12 +161,19 @@ public:
 
   struct Internal{};
 
+  static Time nowUTC() 
+  {
+    time_t t;
+    time(&t); // Returns the time as the number of seconds since the Epoch, 1970-01-01 00:00:00 +0000 (UTC)
+    return {t};
+  }
+
   constexpr Time() : value_() {}
   constexpr Time(time_t t) : value_( t - EpochOffset ) {}
   constexpr Time(const Time& rhs) = default;
   constexpr Time(uint32_t value, Internal ) : value_(value) {}
 
-  constexpr time_t to_time_t() const
+  constexpr time_t toPosix() const
   {
       return static_cast<time_t>(value_) + EpochOffset;
   }
@@ -184,11 +191,9 @@ private:
     uint32_t value_;
 };
 
-//
-//Define Variables
-//
-// Create arrays to store start times of each 1/2hr tariff slot and agile tariff for each
-//
+/** Tariff datas
+@todo If we need to olptimise space, we could reduce storing just StartTime(32bit) and deltaT(8bit) offset between each change of tarriff
+*/
 struct Tariff
 {
   
@@ -208,8 +213,8 @@ uint8_t iCurrentTariff = 0;// to hold live tariff for display
 uint8_t iLowestTariff = 0;  // to store lowest tariff & time slot present in available data
 uint8_t iHighestTariff = 0;  // to store lowest tariff & time slot present in available data
 
-bool haveLocalTime = false;
-Time currentTime; //< CUrrent time in seconds since Epoch
+bool haveLocalTime = false; //< IF we have NTP time @todo Deprecate by fixing orde rof logic/events!
+Time currentTime; //< Current time in seconds since Epoch
 
 long int nextTariffUpdate = 0;                  // used to store millis() of last tariff update
 const int tariffUpdateIntervalSec = 60 * 60 ;  // millis() between successive tariff updates from Octopus (3600000ms = 1h, 10800s = 3h, 14400s = 4h)
@@ -337,20 +342,18 @@ void setup() {
   /**
     NTP server address could be aquired via DHCP,
 
-    NOTE: This call should be made BEFORE esp32 aquires IP address via DHCP,
+    @note This call should be made BEFORE esp32 aquires IP address via DHCP,
     otherwise SNTP option 42 would be rejected by default.
-    NOTE: configTime() function call if made AFTER DHCP-client run
+    @note configTime() function call if made AFTER DHCP-client run
     will OVERRIDE aquired NTP server address
   */
   sntp_servermode_dhcp(1);  // (optional)
       
-  /**
-    This will set configured ntp servers and constant TimeZone/daylightOffset
-    should be OK if your time zone does not need to adjust daylightOffset twice a year,
-    in such a case time adjustment won't be handled automagicaly.
-  */
-  configTime(gmtOffset_sec, daylightOffset_sec, ntpServer1, ntpServer2);
-
+  //https://docs.espressif.com/projects/esp-idf/en/release-v4.4/esp32/api-reference/system/system_time.html#sntp-time-synchronization
+  configTime(0, 0, ntpServer1, ntpServer2);  // 0, 0 because we will use TZ in the next line
+  //setenv("TZ", posixTimeZone, 1);            // Set environment variable with your time zone
+  //tzset();
+  
   WiFi.onEvent(WiFiStationStarted, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_START);
   WiFi.onEvent(WiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
@@ -421,13 +424,8 @@ void loop() {
   if ( tariff.numRecords 
     && (millis() > nextDisplayUpdate) )
   {
-    //
-    //printLocalTime();  // it will take some time to sync time :)
-    //
-      //CHECK TARIFF AND SET OUTPUT PIN HERE
-      struct tm timeinfo;
-      getLocalTime(&timeinfo);
-      currentTime = mktime(&timeinfo);
+      currentTime = Time::nowUTC(); // mktime(&timeinfo);
+
       Time nextTariff = currentTime.roundUp();
       const auto timeToTariff = nextTariff-currentTime;
       if ( timeToTariff <= 5 )
@@ -442,7 +440,7 @@ void loop() {
       }
 
       Serial.print("currentTime is ");
-      Serial.println(currentTime);
+      Serial.println( currentTime );
       Serial.print("Number of Octopus Tariff Records = ");
       Serial.println(tariff.numRecords);
 
@@ -494,11 +492,10 @@ void loop() {
           display.waitForScreenBlocking();
       }
 
-      
-      getLocalTime(&timeinfo);
-      Time now = mktime(&timeinfo);
-      Time nextRefreshAt = now.roundUp(displayUpdateIntervalSec);
-      auto timeToRefresh = nextRefreshAt-now;
+      // @notice It may take some time to read Tariff and present information so we recalcukate time here
+      currentTime = Time::nowUTC();
+      Time nextRefreshAt = currentTime.roundUp(displayUpdateIntervalSec);
+      auto timeToRefresh = nextRefreshAt-currentTime;
       
       Serial.print("Going to sleep for ");
       Serial.print(timeToRefresh);
@@ -582,7 +579,7 @@ void Get_Octopus_Data()  // Get Octopus Data
     {
       auto results = doc["results"];
       // We only consider the first X records as they ar eprovided latest to oldest
-      // note: We only need 48 for a 24hr period
+      // @note We only need 48 for a 24hr period
       tariff.numRecords = std::min( results.size(), (size_t)Tariff::MaxRecords );
       
       Serial.print("# of Records is ");
@@ -603,7 +600,7 @@ void Get_Octopus_Data()  // Get Octopus Data
         Serial.print("p, from ");
         Serial.print(periodStart);
         Serial.print(" ");
-        Serial.println(tariff.startTimes[i].to_time_t() );
+        Serial.println(tariff.startTimes[i].toPosix() );
 #endif
       }
 
@@ -612,7 +609,7 @@ void Get_Octopus_Data()  // Get Octopus Data
 #endif
 
       Serial.print("Got Tariff until ");
-      Serial.println(tariff.startTimes[0].to_time_t() );
+      Serial.println(tariff.startTimes[0].toPosix() );
         
     }
   }
@@ -627,20 +624,6 @@ void printTime(time_t timeToPrint)  // Print time to serial monitor
   Serial.print("buff1 = ");
   Serial.println(buff1);
 }
-// Clock Functions
-//
-/*
-void printLocalTime() {
-  struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    Serial.println("No time available (yet)");
-    return;
-  }
-  //
-  Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-//  display.print(&timeinfo, "%A, %B %d %Y %H:%M:%S");
-}
-*/
 
 /** 24-hour clock time as HH:MM
 */
@@ -676,10 +659,9 @@ void drawStats() {
 
   //
   struct tm timeinfo;
-  if (!getLocalTime(&timeinfo)) {
-    Serial.println("No time available (yet)");
-    return;
-  }
+  const time_t posixCurrentTime = currentTime.toPosix();
+  localtime_r(&posixCurrentTime, &timeinfo);
+
   //
   //Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
   
@@ -689,13 +671,14 @@ void drawStats() {
   display.setCursor(0, 16);
   display.println(&timeinfo, "%A, %B %d @ %H:%M:%S");
   
-  display.setCursor(0, 55); //< TODO: Why gfx isn;t working this out correctly!?
+  display.setCursor(0, 70); //< TODO: Why gfx isn;t working this out correctly!?
   display.setTextSize(2);
   display.setTextColor( colourForTariff(tariff.prices[iCurrentTariff]));
   display.print("Now ");
   // We should always have future data so this is used as an error!
   if ( iCurrentTariff != 0 )
   {
+    display.setTextSize(3);
     display.print(tariff.prices[iCurrentTariff]);
     display.setTextSize(1);
     display.println("p");
@@ -736,7 +719,6 @@ void drawStats() {
 void timeavailable(struct timeval* t) {
   Serial.println("Got time adjustment from NTP!");
   haveLocalTime = true;
-  //  printLocalTime();
 }
 
 //TODO: impl properly
@@ -749,12 +731,15 @@ struct BoxX
 
 static struct BoxX centerAlignText( const char* text, uint16_t xCenter )
 {
+  int16_t pad = 4;
+  int16_t left= pad;
+  int16_t right = SCREEN_WIDTH-pad;
   int16_t x = 0, y = 0;
   uint16_t w = 0, h = 0;
   display.getTextBounds( text, 0, 0, &x, &y, &w, &h );
   const uint16_t halfWidth = w/2;
-  const int16_t xText = (xCenter <= halfWidth ) ? 0 //< Clamp to left border
-                  : (xCenter >= SCREEN_WIDTH-halfWidth ) ? SCREEN_WIDTH-halfWidth //< Clamp to right border
+  const int16_t xText = (xCenter <= left+halfWidth ) ? left //< Clamp to left border
+                  : (xCenter >= right-halfWidth ) ? right-w //< Clamp to right border
                   : xCenter - halfWidth; //< Center align
 
   return {xText, w, h};
@@ -763,7 +748,8 @@ static struct BoxX centerAlignText( const char* text, uint16_t xCenter )
 void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
     , int iTariff, int colour)
 {
-    const auto markerHeight = 7;
+    const auto markerHeight = 10;
+    const auto markerWidth = 8;
     const auto xCurrent = (iCurrentTariff - iTariff) * xCoeff;
     const auto hTariff = int(tariff.prices[iTariff] * tariffYScale);
     const auto yMarker = yTariff - ((hTariff > 0) ? hTariff : 0);
@@ -816,8 +802,8 @@ void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
     }
 
     display.fillTriangle(
-         xCurrent - xCoeff / 2, yMarker - markerHeight
-        , xCurrent + xCoeff / 2, yMarker - markerHeight
+         xCurrent - markerWidth / 2, yMarker - markerHeight
+        , xCurrent + markerWidth / 2, yMarker - markerHeight
         , xCurrent, yMarker - 2, SCREEN_BLUE);
 
 }
@@ -887,13 +873,12 @@ void drawGraph() {
     }
     
     /// X-Axis hour markers    
-    const auto currentHourEnd = currentTime.roundUp(Time::Hour);
+    const auto currentHourEnd = currentTariffTime.roundUp(Time::Hour);
     const auto timetoHourEnd = currentHourEnd - currentTariffTime;
 
     const auto iFirstHour = iCurrentTariff - (timetoHourEnd / Time::HalfHour);
     const uint8_t firstHour = (currentHourEnd - currentDayStart) / Time::Hour;
-
-    display.setFont(&FreeSans9pt7b);    
+  
     display.setTextSize(1);
     display.setTextColor(SCREEN_BLACK);
 
@@ -907,8 +892,17 @@ void drawGraph() {
         display.drawFastVLine( xCurrent+1, top + h, 7, SCREEN_BLACK  );
 
         const uint8_t hourValue = (firstHour + iHour) % 24;
-        display.setCursor( xCurrent - (hourValue >= 10 ? 8 : 4), top + h + 20 );
+
+        // Small Hour
+        auto xMarker = xCurrent - (hourValue >= 10 ? 8 : 4);
+        if ( xMarker < 0 ) xMarker = 0; //< Clip to left
+        display.setCursor( xMarker, top + h + 13 );
+        display.setFont(&FreeSans9pt7b);  
         display.print( hourValue );
+
+        // Tiny ':00'
+        display.setFont(nullptr); //< default  
+        display.print( ":00" );
     }
 
     if (iLowestTariff != -1)
