@@ -51,7 +51,7 @@ const int EPD_4IN01F_ORANGE = 0x6;	///	110
 const int EPD_4IN01F_CLEAN = 0x7;	///	111   unavailable  Afterimage
 
 const int EPD_4IN01F_WIDTH = 640;
-const int EPD_4IN01F_HEIGHT = 400;
+const int EPD_4IN01F_HEIGHT = 480;
 
 
 const int SCREEN_WIDTH = EPD_4IN01F_WIDTH;     // OLED display width, in pixels
@@ -339,20 +339,14 @@ void setup() {
   // Time Setup
   sntp_set_time_sync_notification_cb(timeavailable);
 
-  /**
-    NTP server address could be aquired via DHCP,
-
-    @note This call should be made BEFORE esp32 aquires IP address via DHCP,
-    otherwise SNTP option 42 would be rejected by default.
-    @note configTime() function call if made AFTER DHCP-client run
-    will OVERRIDE aquired NTP server address
-  */
-  sntp_servermode_dhcp(1);  // (optional)
-      
   //https://docs.espressif.com/projects/esp-idf/en/release-v4.4/esp32/api-reference/system/system_time.html#sntp-time-synchronization
   configTime(0, 0, ntpServer1, ntpServer2);  // 0, 0 because we will use TZ in the next line
-  //setenv("TZ", posixTimeZone, 1);            // Set environment variable with your time zone
-  //tzset();
+
+  // NTP server address could be aquired via DHCP,
+  sntp_servermode_dhcp(1);  // (optional)
+  
+  setenv("TZ", posixTimeZone, 1);            // Set environment variable with your time zone
+  tzset();
   
   WiFi.onEvent(WiFiStationStarted, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_START);
   WiFi.onEvent(WiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
