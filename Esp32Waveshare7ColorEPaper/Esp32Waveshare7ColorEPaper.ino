@@ -51,8 +51,9 @@ const int EPD_4IN01F_ORANGE = 0x6;	///	110
 const int EPD_4IN01F_CLEAN = 0x7;	///	111   unavailable  Afterimage
 
 const int EPD_4IN01F_WIDTH = 640;
-const int EPD_4IN01F_HEIGHT = 480;
+const int EPD_4IN01F_HEIGHT = 400; //@TODO: Should be 448 but we get out-of-memory errors
 
+/// - 640*448 == 280 KB for Video so < 120 KB for everything else assuming 400KB SRAM (520 for WROOM)
 
 const int SCREEN_WIDTH = EPD_4IN01F_WIDTH;     // OLED display width, in pixels
 const int SCREEN_HEIGHT = EPD_4IN01F_HEIGHT;     // OLED display height, in pixels
@@ -69,6 +70,7 @@ const int SCREEN_CLEAN = EPD_4IN01F_CLEAN;
 const bool headless = false; //< Run without display
 // Display Scehmatic https://files.waveshare.com/upload/b/bb/4.01inch_e-Paper_HAT_%28F%29.pdf
 // Reference design https://files.waveshare.com/upload/f/f0/4.01inch-ePaper-F-Reference-Design.pdf
+// - Good Display datasheet https://www.good-display.com/product/381.html
 Adafruit_4_01_ColourEPaper display(
     SCREEN_WIDTH
   , SCREEN_HEIGHT
@@ -77,11 +79,7 @@ Adafruit_4_01_ColourEPaper display(
   , BUSY_PIN
   , false);
 
-//
-// Declare Functions
-//
-void printTime(time_t timeToPrint);  // Print time to serial monitor
-void Get_Octopus_Data();             // Get Octopus Data
+void getOctopusTariff();             // Get Octopus Data
 void timeavailable(struct timeval* t);  // Callback function (get's called when time adjusts via NTP)
 void drawStats();                      // Routine Refresh of Display
 void drawGraph();                       // Draw tariff graph
@@ -89,8 +87,6 @@ void drawGraph();                       // Draw tariff graph
 const char* server = "api.octopus.energy";  // Server URL
 const char* ntpServer1 = "pool.ntp.org";
 const char* ntpServer2 = "time.nist.gov";
-const long gmtOffset_sec = 0;
-const int daylightOffset_sec = 0;
 
 // @todo Othwr time zones can be defined from: https://github.com/nayarsystems/posix_tz_db/blob/master/zones.csv
 const char* posixTimeZone = "GMT0BST,M3.5.0/1,M10.5.0";// Time Zone as "Europe/London"	
@@ -129,8 +125,8 @@ const char* octopus =
 class Price
 {
 public:
-
-    static constexpr int16_t Scale = 200;
+    //TODO: Fixed8p8 type (8 bits integer, 8 bits decimal etc)
+    static constexpr int16_t Scale = 256;
 
     constexpr Price() : value_() {}
     constexpr Price(float f) : value_( static_cast<int16_t>(std::round(f * Scale)) ) {}
@@ -145,7 +141,8 @@ private:
     int16_t value_;
 };
 
-static_assert(Price(1.1) == 1.1F);
+static_assert(Price(100.0f) == 100.0F);
+static_assert(Price(0.5f) == 0.5F);
 
 
 /** 30-minute time resolution 
@@ -163,9 +160,8 @@ public:
 
   static Time nowUTC() 
   {
-    time_t t;
-    time(&t); // Returns the time as the number of seconds since the Epoch, 1970-01-01 00:00:00 +0000 (UTC)
-    return {t};
+     // @note time() Returns the time as the number of seconds since the Epoch, 1970-01-01 00:00:00 +0000 (UTC)
+    return { time(NULL) };
   }
 
   constexpr Time() : value_() {}
@@ -348,6 +344,7 @@ void setup() {
   setenv("TZ", posixTimeZone, 1);            // Set environment variable with your time zone
   tzset();
   
+  
   WiFi.onEvent(WiFiStationStarted, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_START);
   WiFi.onEvent(WiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
@@ -395,7 +392,7 @@ void loop() {
     {
       tariff.numRecords = 0; //< Clear stale data
 
-      Get_Octopus_Data();  
+      getOctopusTariff();  
 
       if ( tariff.numRecords != 0)  
       {
@@ -502,121 +499,117 @@ void loop() {
   }
 } 
 
-void Get_Octopus_Data()  // Get Octopus Data
+void getOctopusTariff()  // Get Octopus Data
 {  
   Serial.println("\nBegin get octopus data...");
   client.setCACert(octopus);
   Serial.println("\nStarting connection to Octopus server...");
   if (!client.connect(server, 443)) {
-    Serial.println("Connection failed!");
-    
-  } else {
-    Serial.println("Connected to server!");
-    
 
-
-    // Make a HTTP request:
-    client.print("GET https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-J/standard-unit-rates/?page_size=");
-    client.print(Tariff::MaxRecords);
-    //TODO: Could use a 48-sample buffer and `period_from={Now}` in ISO 8601 date format e.g. "2018-05-17T16:00:00Z"
-    client.println(" HTTP/1.1");
-    client.println("Host: api.octopus.energy");
-    client.println(auth_string); // enter Octopus authorisation string, collected from secrets.h
-    client.println("Connection: close");
-    client.println();
-    
-    //
-    while (client.connected()) {
-      String response = client.readStringUntil('\n');
-        
-        //Serial.println(response);
-        
-        /**Response starts with:
-          Starting connection to Octopus server...
-          Connected to server!
-          HTTP/1.1 200 OK
-          Date: Tue, 30 Jan 2024 20:32:57 GMT
-          Content-Type: application/json
-          Content-Length: 14095
-          ...
-          \r
-        */
-      if (response == "\r") {
-        Serial.println("headers received");
-        // TODO: CHeck the headers and read `Content-Length` etc
-        break;
-      }
+    char buff[96];
+    if (client.lastError(buff, sizeof(buff)) < 0) {
+        Serial.println(buff);
     }
+    Serial.println("Connection error");
+    return;
+  }
 
-    //Await receipt of data
-    while( client.connected() && !client.available() );
-    
-    // Wait for data bytes to be received
-    String line;
-    do
-    {
-      line += client.readString();
-    }
-    while( client.connected() /* && client.available()*/ ); //< While connected and more data to be received
+  Serial.println("Connected to server!");
+  
 
-    client.stop();
 
-    // Serial.println(line);
-    DeserializationError error = deserializeJson(doc, line);
-    if (error) {
-      Serial.print(F("deserializing JSON failed"));
-      Serial.println(error.f_str());
-      Serial.println("Here's the JSON I tried to parse");
-      Serial.println(line);
-    }
-    else 
-    {
-      auto results = doc["results"];
-      // We only consider the first X records as they ar eprovided latest to oldest
-      // @note We only need 48 for a 24hr period
-      tariff.numRecords = std::min( results.size(), (size_t)Tariff::MaxRecords );
+  // Make a HTTP request:
+  client.print("GET https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-J/standard-unit-rates/?page_size=");
+  client.print(Tariff::MaxRecords);
+  //TODO: Could use a 48-sample buffer and `period_from={Now}` in ISO 8601 date format e.g. "2018-05-17T16:00:00Z"
+  client.println(" HTTP/1.1");
+  client.println("Host: api.octopus.energy");
+  client.println(auth_string); // enter Octopus authorisation string, collected from secrets.h
+  client.println("Connection: close");
+  client.println();
+  
+  //
+  while (client.connected()) {
+    String response = client.readStringUntil('\n');
       
-      Serial.print("# of Records is ");
-      Serial.println(tariff.numRecords);
+      //Serial.println(response);
       
-      for ( int i =0; i < tariff.numRecords; ++i )
-        {
-        auto resultRate = results[i];
-        float price = resultRate["value_inc_vat"];
-        tariff.prices[i] = price;
-        String periodStart = resultRate["valid_from"];
-        struct tm tmpTime;
-        strptime(periodStart.c_str(), "%Y-%m-%dT%H:%M:%SZ", &tmpTime);
-        tariff.startTimes[i] = mktime(&tmpTime);
-        
-#if 0 //< Print tarriff
-        Serial.print(price, 2);
-        Serial.print("p, from ");
-        Serial.print(periodStart);
-        Serial.print(" ");
-        Serial.println(tariff.startTimes[i].toPosix() );
-#endif
-      }
-
-#if 0 //TODO: testing tariffs!
-      tariff.prices[5] = -4.5f;
-#endif
-
-      Serial.print("Got Tariff until ");
-      Serial.println(tariff.startTimes[0].toPosix() );
-        
+      /**Response starts with:
+        Starting connection to Octopus server...
+        Connected to server!
+        HTTP/1.1 200 OK
+        Date: Tue, 30 Jan 2024 20:32:57 GMT
+        Content-Type: application/json
+        Content-Length: 14095
+        ...
+        \r
+      */
+    if (response == "\r") {
+      Serial.println("headers received");
+      // TODO: CHeck the headers and read `Content-Length` etc
+      break;
     }
   }
-}
-//
-void printTime(time_t timeToPrint)  // Print time to serial monitor
-{
-  char buff1[100];
-  struct tm tmpTime;
-  gmtime_r(&timeToPrint, &tmpTime);
-  strftime(buff1, 100, "%A, %B-%Y, %T", &tmpTime);
-  Serial.print("buff1 = ");
-  Serial.println(buff1);
+
+  //Await receipt of data
+  while( client.connected() && !client.available() );
+  
+  // Wait for data bytes to be received
+  String line;
+  do
+  {
+    line += client.readString();
+  }
+  while( client.connected() /* && client.available()*/ ); //< While connected and more data to be received
+
+  client.stop();
+
+  // Serial.println(line);
+  DeserializationError error = deserializeJson(doc, line);
+  if (error) {
+    Serial.print(F("deserializing JSON failed"));
+    Serial.println(error.f_str());
+    Serial.println("Here's the JSON I tried to parse");
+    Serial.println(line);
+  }
+  else 
+  {
+    auto results = doc["results"];
+    // We only consider the first X records as they ar eprovided latest to oldest
+    // @note We only need 48 for a 24hr period
+    tariff.numRecords = std::min( results.size(), (size_t)Tariff::MaxRecords );
+    
+    Serial.print("# of Records is ");
+    Serial.println(tariff.numRecords);
+    
+    for ( int i =0; i < tariff.numRecords; ++i )
+      {
+      auto resultRate = results[i];
+      float price = resultRate["value_inc_vat"];
+      tariff.prices[i] = price;
+      String periodStart = resultRate["valid_from"];
+      struct tm tmpTime;
+      strptime(periodStart.c_str(), "%Y-%m-%dT%H:%M:%SZ", &tmpTime);
+      tmpTime.tm_isdst = false;
+      tariff.startTimes[i] = mktime(&tmpTime);
+      
+#if 0 //< Print tarriff
+      Serial.print(price, 2);
+      Serial.print("p, from ");
+      Serial.print(periodStart);
+      Serial.print(" ");
+      Serial.println(tariff.startTimes[i].toPosix() );
+#endif
+    }
+
+#if 0 //TODO: testing tariffs!
+    tariff.prices[5] = -4.5f;
+#endif
+
+    Serial.print("Got Tariff until ");
+    Serial.println(tariff.startTimes[0].toPosix() );
+      
+  }
 }
 
 /** 24-hour clock time as HH:MM
@@ -742,7 +735,7 @@ static struct BoxX centerAlignText( const char* text, uint16_t xCenter )
 void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
     , int iTariff, int colour)
 {
-    const auto markerHeight = 10;
+    const auto markerHeight = 15;
     const auto markerWidth = 8;
     const auto xCurrent = (iCurrentTariff - iTariff) * xCoeff;
     const auto hTariff = int(tariff.prices[iTariff] * tariffYScale);
@@ -751,14 +744,16 @@ void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
     display.setTextSize(1);
     display.setTextColor(colour, SCREEN_WHITE);
 
-    const auto time24 = Time24::fromSecondsTimepoint(tariff.startTimes[iTariff] - currentDayStart);
 
     // Pad between marker and text and text lines
-    const auto lineSpacing = 3;
+    const auto lineSpacing = 4;
     auto yCursor = yMarker - markerHeight - lineSpacing;
     
     char text[64];
 
+#if false 
+    // @note Todo: Time is printed incorrectly for Daylight Savings... maybe should use localtime_r again!
+    const auto time24 = Time24::fromSecondsTimepoint(tariff.startTimes[iTariff] - currentDayStart);
     snprintf( text, sizeof(text), "%u:%02u"
       , time24.hour
       , time24.minute );
@@ -768,8 +763,9 @@ void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
         display.setCursor( pos.x, yCursor );
         display.print(text);
         yCursor -= pos.h + lineSpacing;
-    }
-    
+    }    
+#endif
+
     const auto tarriffIn = Time24::fromSecondsDuration(tariff.startTimes[iTariff] - currentTime);      
     snprintf( text, sizeof(text), "%uh %02um"
       , tarriffIn.hour
@@ -871,14 +867,20 @@ void drawGraph() {
     const auto timetoHourEnd = currentHourEnd - currentTariffTime;
 
     const auto iFirstHour = iCurrentTariff - (timetoHourEnd / Time::HalfHour);
-    const uint8_t firstHour = (currentHourEnd - currentDayStart) / Time::Hour;
+    
+  struct tm timeinfo;
+  const time_t posixCurrentTime = currentHourEnd.toPosix();
+  localtime_r(&posixCurrentTime, &timeinfo);
+
+    const uint8_t firstHour = timeinfo.tm_hour;// (currentHourEnd - currentDayStart) / Time::Hour + ;
   
     display.setTextSize(1);
     display.setTextColor(SCREEN_BLACK);
 
     const auto iHourMarkerBase = iCurrentTariff-iFirstHour;
     const auto hourCount = (iCurrentTariff-1)/2;
-    for (int iHour = 0; iHour <= hourCount; ++iHour)
+    const auto iHourStep = (hourCount > 12) + 1; // @note X-Axis labels otherwise overlap!
+    for (int iHour = 0; iHour <= hourCount; iHour += iHourStep)
     {
         const auto xCurrent = (iHourMarkerBase + iHour*2) * xCoeff;
         
