@@ -11,10 +11,11 @@
 #include <limits>
 #include <algorithm> //< std::clamp
 
+//TODO: Migrate to using SDF text rendering - smoother  scaling + reduced memory usage goals
 //https://learn.adafruit.com/adafruit-gfx-graphics-library/using-fonts
 #include <Fonts/FreeSansBold12pt7b.h>
 #include <Fonts/FreeSans9pt7b.h>
-#include "Adafruit_4_01_ColourEPaper.h"
+#include "ColourEPaper.h"
 
 const char firmwareDate[] = "07/02/2024";
 
@@ -71,7 +72,7 @@ const bool headless = false; //< Run without display
 // Display Scehmatic https://files.waveshare.com/upload/b/bb/4.01inch_e-Paper_HAT_%28F%29.pdf
 // Reference design https://files.waveshare.com/upload/f/f0/4.01inch-ePaper-F-Reference-Design.pdf
 // - Good Display datasheet https://www.good-display.com/product/381.html
-Adafruit_4_01_ColourEPaper display(
+ColourEPaper display(
     SCREEN_WIDTH
   , SCREEN_HEIGHT
   , RST_PIN
@@ -220,10 +221,8 @@ const int displayMinimumUpdateInterval = 30; /// Don't update display faster tha
 const int displayUpdateIntervalSec = 15 * 60;             // interval between checks of current tariff data against tariffThreshold
 long int nextDisplayUpdate = 0;
 
-//
 WiFiClientSecure client;
 JsonDocument doc;
-
 
 /** STA driver started
 */
@@ -307,20 +306,19 @@ int colourForTariff( float tariff )
   return tariffColours[i];
 }
 
-//
-void setup() {
+
+void setup()
+ {
   
   // initialize digital pin LED_PIN as an output.
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH);  // turn the LED on (HIGH is the voltage level)
+  digitalWrite(LED_PIN, HIGH);  // turn the LED on
 
   //Initialize serial and wait for port to open:
   Serial.begin(115200);
 
-  Serial.println(F("Booty bootface..."));
   if (!headless)
-  {
-    
+  {    
     display.cp437(true); //< Use correct character tables
     display.setTextWrap(false); 
     
@@ -330,8 +328,6 @@ void setup() {
     }
   }
   
-  //delay(2000);
-  //
   // Time Setup
   sntp_set_time_sync_notification_cb(timeavailable);
 
@@ -341,36 +337,14 @@ void setup() {
   // NTP server address could be aquired via DHCP,
   sntp_servermode_dhcp(1);  // (optional)
   
-  setenv("TZ", posixTimeZone, 1);            // Set environment variable with your time zone
-  tzset();
-  
+  setenv("TZ", posixTimeZone, 1); // Set tiem zone
+  tzset();  
   
   WiFi.onEvent(WiFiStationStarted, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_START);
   WiFi.onEvent(WiFiStationConnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_CONNECTED);
   WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
   WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);  
   WiFi.onEvent(WiFiStationStopped, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_STOP);
-  /* Remove WiFi event
-  Serial.print("WiFi Event ID: ");
-  Serial.println(eventID);
-  WiFi.removeEvent(eventID);*/
-
-  //
-
- /* display.clearDisplay();
-  //
-  Serial.println("5555");
-  display.setTextSize(2);  // Draw 2X-scale text
-  display.setTextColor(SCREEN_BLACK);
-  display.setCursor(5, 0);
-  display.println(F("SSID: "));
-  display.println(F(wifiSsid));
-  Serial.println("33333");
-
-
-  display.display();  // Show initial text
-   display.waitForScreenBlocking();
-  */
 }
 
 //**************************************
@@ -516,8 +490,6 @@ void getOctopusTariff()  // Get Octopus Data
 
   Serial.println("Connected to server!");
   
-
-
   // Make a HTTP request:
   client.print("GET https://api.octopus.energy/v1/products/AGILE-FLEX-22-11-25/electricity-tariffs/E-1R-AGILE-FLEX-22-11-25-J/standard-unit-rates/?page_size=");
   client.print(Tariff::MaxRecords);
@@ -583,7 +555,7 @@ void getOctopusTariff()  // Get Octopus Data
     Serial.println(tariff.numRecords);
     
     for ( int i =0; i < tariff.numRecords; ++i )
-      {
+    {
       auto resultRate = results[i];
       float price = resultRate["value_inc_vat"];
       tariff.prices[i] = price;
@@ -640,16 +612,13 @@ struct Time24
     }
 };
 
-void drawStats() {
-    
+void drawStats()
+{    
   Serial.print("Updating display...");
 
-  //
   struct tm timeinfo;
   const time_t posixCurrentTime = currentTime.toPosix();
   localtime_r(&posixCurrentTime, &timeinfo);
-
-  //
   //Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
   
   display.setFont(&FreeSansBold12pt7b);
@@ -662,6 +631,7 @@ void drawStats() {
   display.setTextSize(2);
   display.setTextColor( colourForTariff(tariff.prices[iCurrentTariff]));
   display.print("Now ");
+
   // We should always have future data so this is used as an error!
   if ( iCurrentTariff != 0 )
   {
@@ -701,9 +671,10 @@ void drawStats() {
 
   display.setTextColor(SCREEN_BLACK);
 }
+
 // Callback function (get's called when time adjusts via NTP)
-//
-void timeavailable(struct timeval* t) {
+void timeavailable(struct timeval* t) 
+{
   Serial.println("Got time adjustment from NTP!");
   haveLocalTime = true;
 }
@@ -752,7 +723,7 @@ void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
     char text[64];
 
 #if false 
-    // @note Todo: Time is printed incorrectly for Daylight Savings... maybe should use localtime_r again!
+    // @note Todo: Time is printed incorrectly for Daylight Savings... maybe should use localtime_r etc.
     const auto time24 = Time24::fromSecondsTimepoint(tariff.startTimes[iTariff] - currentDayStart);
     snprintf( text, sizeof(text), "%u:%02u"
       , time24.hour
@@ -798,7 +769,8 @@ void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
 
 }
 
-void drawGraph() {
+void drawGraph() 
+{
     const int left = 0;
     const int top = SCREEN_HEIGHT / 2;
     const int w = SCREEN_WIDTH;
@@ -812,18 +784,6 @@ void drawGraph() {
 
     const auto barCount = (tariff.startTimes[0] - currentTariffTime + Time::HalfHour) / Time::HalfHour;
     const auto xCoeff = (w + (barCount/2)) / barCount;
-    //const auto maxCount = (w + (xCoeff-1)) /xCoeff;
-#if 0
-    while (i < w) {
-        if (i % xCoeff == 0) {
-            display.drawPixel(i, top + h / 2 + 10, SCREEN_BLACK);  // Draw grid line at 10p intervals
-            display.drawPixel(i, top + h / 2, SCREEN_BLACK);
-            display.drawPixel(i, top + h / 2 - 10, SCREEN_BLACK);
-        }
-        i++;
-    }
-    //display.setFont(); //< default font
-#endif
 
     const auto yTariff = top + h;
     // only plot future values

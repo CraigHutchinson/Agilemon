@@ -1,6 +1,6 @@
-#include "Adafruit_4_01_ColourEPaper.h"
+#include "ColourEPaper.h"
 
-Adafruit_4_01_ColourEPaper::Adafruit_4_01_ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, bool debug_On) : Adafruit_GFX(w, h), buffer1(NULL), buffer2(NULL)
+ColourEPaper::ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, bool debug_On) : Adafruit_GFX(w, h), buffer1(NULL), buffer2(NULL)
 {
     dcPin = dc_pin;
     busyPin = busy_pin;
@@ -17,7 +17,7 @@ Adafruit_4_01_ColourEPaper::Adafruit_4_01_ColourEPaper(int w, int h, int rst_pin
     spiSettingsObject = SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE0);
 }
 
-Adafruit_4_01_ColourEPaper::~Adafruit_4_01_ColourEPaper()
+ColourEPaper::~ColourEPaper()
 {
     free(buffer1);
     free(buffer2);
@@ -25,7 +25,7 @@ Adafruit_4_01_ColourEPaper::~Adafruit_4_01_ColourEPaper()
     delete spi;
 }
 
-bool Adafruit_4_01_ColourEPaper::begin(void)
+bool ColourEPaper::begin(void)
 {
     // pin and spi pointer allocation
     spi = new SPIClass(HSPI);
@@ -72,7 +72,7 @@ bool Adafruit_4_01_ColourEPaper::begin(void)
     return frameBufferAndInit();
 }
 
-bool Adafruit_4_01_ColourEPaper::begin(int sclk_pin, int copi_pin, int cs_pin)
+bool ColourEPaper::begin(int sclk_pin, int copi_pin, int cs_pin)
 {
     // pin and spi pointer allocation
     csPin = cs_pin;
@@ -96,7 +96,7 @@ bool Adafruit_4_01_ColourEPaper::begin(int sclk_pin, int copi_pin, int cs_pin)
     return frameBufferAndInit();
 }
 
-bool Adafruit_4_01_ColourEPaper::frameBufferAndInit()
+bool ColourEPaper::frameBufferAndInit()
 {
     // framebuffer allocation
     if (debugOn)
@@ -189,7 +189,7 @@ bool Adafruit_4_01_ColourEPaper::frameBufferAndInit()
     return true;
 }
 
-void Adafruit_4_01_ColourEPaper::display(void)
+void ColourEPaper::display(void)
 {
     spi->beginTransaction(spiSettingsObject);
     writeSPI(0x61, true); // Set Resolution setting
@@ -239,7 +239,7 @@ void Adafruit_4_01_ColourEPaper::display(void)
 
     // either block until screen finishes (waitForScreenBlocking) or do something else and then send POF + endtransaction yourself once busy is high (checkBusy + sendPOFandLeaveSPI)
 }
-void Adafruit_4_01_ColourEPaper::clearDisplay(void)
+void ColourEPaper::clearDisplay(void)
 {
     if (debugOn)
     {
@@ -249,7 +249,7 @@ void Adafruit_4_01_ColourEPaper::clearDisplay(void)
     memset(buffer2, 0x11, (WIDTH * HEIGHT / 2) / 2);
 }
 
-void Adafruit_4_01_ColourEPaper::drawPixel(int16_t x, int16_t y, uint16_t color)
+void ColourEPaper::drawPixel(int16_t x, int16_t y, uint16_t color)
 {
     if (x > WIDTH - 1 || x < 0 || y > HEIGHT - 1 || y < 0)
     {
@@ -274,7 +274,7 @@ void Adafruit_4_01_ColourEPaper::drawPixel(int16_t x, int16_t y, uint16_t color)
                             : (newByte & 0x0F) | (color<<4) ;                 // clear the latter half for new colour
 }
 
-void Adafruit_4_01_ColourEPaper::test(void)
+void ColourEPaper::test(void)
 {
     // used for testing begin function
     // This function writes bars of each colour to the screen. Use blocking wait function or do it manually with check busy and POF+SPIShutdown
@@ -346,7 +346,7 @@ void Adafruit_4_01_ColourEPaper::test(void)
     // either block until screen finishes (waitForScreenBlocking) or do something else and then send POF + endtransaction yourself once busy is high (checkBusy + sendPOFandLeaveSPI)
 }
 
-void Adafruit_4_01_ColourEPaper::writeSPI(uint8_t something, bool command)
+void ColourEPaper::writeSPI(uint8_t something, bool command)
 {
     if (command)
     {
@@ -364,7 +364,7 @@ void Adafruit_4_01_ColourEPaper::writeSPI(uint8_t something, bool command)
     digitalWrite(csPin, HIGH);
 }
 
-void Adafruit_4_01_ColourEPaper::resetScreen(void)
+void ColourEPaper::resetScreen(void)
 {
 
     digitalWrite(rstPin, HIGH);
@@ -375,7 +375,7 @@ void Adafruit_4_01_ColourEPaper::resetScreen(void)
     delay(200);
 }
 
-bool Adafruit_4_01_ColourEPaper::busyHigh()
+bool ColourEPaper::busyHigh()
 {
     unsigned long endTime = millis() + BUSY_THRESH;
     while (!digitalRead(busyPin) && (millis() < endTime))
@@ -389,7 +389,7 @@ bool Adafruit_4_01_ColourEPaper::busyHigh()
     return true;
 }
 
-bool Adafruit_4_01_ColourEPaper::busyLow()
+bool ColourEPaper::busyLow()
 {
     unsigned long endTime = millis() + BUSY_THRESH;
     while (digitalRead(busyPin) && (millis() < endTime))
@@ -403,7 +403,7 @@ bool Adafruit_4_01_ColourEPaper::busyLow()
     return true;
 }
 
-void Adafruit_4_01_ColourEPaper::waitForScreenBlocking(void)
+void ColourEPaper::waitForScreenBlocking(void)
 {
     if (debugOn)
     {
@@ -414,7 +414,7 @@ void Adafruit_4_01_ColourEPaper::waitForScreenBlocking(void)
     sendPOFandLeaveSPI();
 }
 
-void Adafruit_4_01_ColourEPaper::sendPOFandLeaveSPI(void)
+void ColourEPaper::sendPOFandLeaveSPI(void)
 {
     if (debugOn)
     {
@@ -509,7 +509,7 @@ int EPD_4IN01F_init()
 }
 */
 
-bool Adafruit_4_01_ColourEPaper::checkBusy(void)
+bool ColourEPaper::checkBusy(void)
 {
     if (debugOn)
     {

@@ -1,5 +1,5 @@
-#ifndef _Adafruit_4_01_ColourEPaper
-#define _Adafruit_4_01_ColourEPaper
+#ifndef _ColourEPaper
+#define _ColourEPaper
 
 #include <Adafruit_GFX.h>
 #include <SPI.h>
@@ -15,11 +15,11 @@
 #define BUSY_THRESH 5000
 #define SPI_SPEED 10000000 //< 10 MHz is maximum
 
-class Adafruit_4_01_ColourEPaper : public Adafruit_GFX
+class ColourEPaper : public Adafruit_GFX
 {
 public:
-    Adafruit_4_01_ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, bool debug_On);
-    ~Adafruit_4_01_ColourEPaper();
+    ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, bool debug_On);
+    ~ColourEPaper();
 
     bool begin(void);
     bool begin(int sclk_pin, int copi_pin, int cs_pin);
