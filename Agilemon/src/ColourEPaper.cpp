@@ -1,11 +1,11 @@
 #include "ColourEPaper.h"
 
-ColourEPaper::ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, bool debug_On) : Adafruit_GFX(w, h), buffer1(NULL), buffer2(NULL)
+ColourEPaper::ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin ) : Adafruit_GFX(w, h), buffer1(NULL), buffer2(NULL)
 {
     dcPin = dc_pin;
     busyPin = busy_pin;
     rstPin = rst_pin;
-    debugOn = debug_On;
+    
     if (debugOn)
     {
         Serial.println("Setting Constructor pinModes");
@@ -101,12 +101,15 @@ bool ColourEPaper::frameBufferAndInit()
     // framebuffer allocation
     if (debugOn)
     {
-        Serial.println("Let's allocate some memory");
+        Serial.printf("Let's allocate some memory w=%i h=%i\n", WIDTH, HEIGHT );
     }
 
-    // Apparently doesn't work when 1 large buffer is allocated
-    buffer1 = (char *)malloc((WIDTH * HEIGHT / 2) / 2);
-    buffer2 = (char *)malloc((WIDTH * HEIGHT / 2) / 2);
+
+    // We often won't have enough contiguous memory to represent the frame buffer in a single allocation
+    const auto frameSizeBytes = (WIDTH * HEIGHT / 2);
+    const auto bufferSize = frameSizeBytes / 2;
+    buffer1 = new char[bufferSize];
+    buffer2 = new char[bufferSize];
 
     if (buffer1 == NULL || buffer2 == NULL)
     {
@@ -121,8 +124,8 @@ bool ColourEPaper::frameBufferAndInit()
     {
         Serial.println("Setting everything to 1");
     }
-    memset(buffer1, 0x11, (WIDTH * HEIGHT / 2) / 2); // fill everything with white
-    memset(buffer2, 0x11, (WIDTH * HEIGHT / 2) / 2); // fill everything with white
+    memset(buffer1, 0x11, bufferSize); // fill everything with white
+    memset(buffer2, 0x11, bufferSize); // fill everything with white
 
     // send initialization commands to screen
     if (debugOn)
@@ -193,27 +196,25 @@ void ColourEPaper::display(void)
 {
     spi->beginTransaction(spiSettingsObject);
     writeSPI(0x61, true); // Set Resolution setting
-    writeSPI(0x02, false);
-    writeSPI(0x80, false);
-    writeSPI(0x01, false);
-    writeSPI(0x90, false);
+
+    //0x02, 0x80, 0x01,0x90 = 600x400
+    char resolution[4] = {
+         char(WIDTH>>8), char(WIDTH & 0xFF),
+         char(HEIGHT>>8), char(HEIGHT & 0xFF),
+    };
+
+    //Data
+    digitalWrite(dcPin, HIGH);
+    digitalWrite(csPin, LOW);
+    spi->transfer( resolution, sizeof(resolution) );
+    digitalWrite(csPin, HIGH);
 
     writeSPI(0x10, true);
     if (debugOn)
     {
         Serial.println("Writing to GDDR");
     }
-#if false
-    for (long i = 0; i < (WIDTH * HEIGHT / 2) / 2; i++)
-    {
-        writeSPI(buffer1[i], false);
-    }
-
-    for (long i = 0; i < (WIDTH * HEIGHT / 2) / 2; i++)
-    {
-        writeSPI(buffer2[i], false);
-    }
-#else
+    
     //Data
     digitalWrite(dcPin, HIGH);
     digitalWrite(csPin, LOW);
@@ -223,7 +224,6 @@ void ColourEPaper::display(void)
 
     digitalWrite(csPin, HIGH);
 
-#endif
     if (debugOn)
     {
         Serial.println("Wrote stuff to GDDR");
@@ -251,7 +251,8 @@ void ColourEPaper::clearDisplay(void)
 
 void ColourEPaper::drawPixel(int16_t x, int16_t y, uint16_t color)
 {
-    if (x > WIDTH - 1 || x < 0 || y > HEIGHT - 1 || y < 0)
+    if (x >= WIDTH || x < 0
+     || y >= HEIGHT || y < 0)
     {
         return;
     }
@@ -274,57 +275,66 @@ void ColourEPaper::drawPixel(int16_t x, int16_t y, uint16_t color)
                             : (newByte & 0x0F) | (color<<4) ;                 // clear the latter half for new colour
 }
 
-void ColourEPaper::test(void)
+void ColourEPaper::test()
 {
     // used for testing begin function
     // This function writes bars of each colour to the screen. Use blocking wait function or do it manually with check busy and POF+SPIShutdown
     spi->beginTransaction(spiSettingsObject);
     writeSPI(0x61, true); // Set Resolution setting
-    writeSPI(0x02, false);
-    writeSPI(0x80, false);
-    writeSPI(0x01, false);
-    writeSPI(0x90, false);
+
+    //0x02, 0x80, 0x01,0x90 = 600x400
+    char resolution[4] = {
+         char(WIDTH>>8), char(WIDTH & 0xFF),
+         char(HEIGHT>>8), char(HEIGHT & 0xFF),
+    };
+
+    //Data
+    digitalWrite(dcPin, HIGH);
+    digitalWrite(csPin, LOW);
+    spi->transfer( resolution, sizeof(resolution) );
+    digitalWrite(csPin, HIGH);
+
     writeSPI(0x10, true);
 
-    for (int j = 0; j < 400; j++)
+    for (int j = 0; j < HEIGHT; j++)
     {
 
-        for (int i = 0; i < 40; i++)
+        for (int i = 0; i < WIDTH/8; i+2)
         {
             writeSPI(0x0, false);
         }
 
-        for (int i = 0; i < 40; i++)
+        for (int i = 0; i < WIDTH/8; i+2)
         {
             writeSPI(0x11, false);
         }
 
-        for (int i = 0; i < 40; i++)
+        for (int i = 0; i < WIDTH/8; i+2)
         {
             writeSPI(0x22, false);
         }
 
-        for (int i = 0; i < 40; i++)
+        for (int i = 0; i < WIDTH/8; i+2)
         {
             writeSPI(0x33, false);
         }
 
-        for (int i = 0; i < 40; i++)
+        for (int i = 0; i < WIDTH/8; i+2)
         {
             writeSPI(0x44, false);
         }
 
-        for (int i = 0; i < 40; i++)
+        for (int i = 0; i < WIDTH/8; i+2)
         {
             writeSPI(0x55, false);
         }
 
-        for (int i = 0; i < 40; i++)
+        for (int i = 0; i < WIDTH/8; i+2)
         {
             writeSPI(0x66, false);
         }
 
-        for (int i = 0; i < 40; i++)
+        for (int i = 0; i < WIDTH/8; i+2)
         {
             writeSPI(0x77, false);
         }
@@ -499,10 +509,14 @@ int EPD_4IN01F_init()
     EPD_SendData(0xAA);
 	
 	EPD_SendCommand(0x61);//Set Resolution setting
-    EPD_SendData(0x02);
-    EPD_SendData(0x80);
-    EPD_SendData(0x01);
-    EPD_SendData(0x90);
+    
+    //Data
+    digitalWrite(dcPin, HIGH);
+    digitalWrite(csPin, LOW);
+    spi->transfer( &WIDTH, 2 );
+    spi->transfer( &HEIGHT, 2 );
+    digitalWrite(csPin, HIGH);
+    
     EPD_SendCommand(0x10);//begin write data to e-Paper
 	
     return 0;

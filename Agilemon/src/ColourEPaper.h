@@ -18,7 +18,7 @@
 class ColourEPaper : public Adafruit_GFX
 {
 public:
-    ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, bool debug_On);
+    ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin);
     ~ColourEPaper();
 
     bool begin(void);
@@ -46,7 +46,6 @@ protected:
     int dcPin;
     int busyPin;
     bool debugOn = false;
-    bool needToDeleteSPI;
 };
 
 #endif
