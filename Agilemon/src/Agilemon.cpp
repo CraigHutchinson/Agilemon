@@ -1,5 +1,6 @@
 #include <WiFi.h>
 #include "time.h"
+#include <esp_wifi.h>
 #include <esp_sntp.h>
 #include <WiFiClientSecure.h>
 #include <esp_crt_bundle.h>
@@ -27,17 +28,7 @@ const char firmwareDate[] = "07/02/2024";
 @endcode
 */
 #include "secrets.h"
-
-// SPI
-const int DIN_PIN = 14;	//SPI MOSI pin, data input
-const int SCLK_PIN = 13;	//SPI CLK pin, clock signal input
-const int CS_PIN = 15;	//Chip selection, low active
-
-const int DC_PIN = 27;	//Data/command, low for commands, high for data
-const int RST_PIN = 26;	//Reset, low active
-const int BUSY_PIN = 25;	//Busy status output pin (means busy)
-
-const int LED_PIN = 2; //< GPIO2 has LED
+#include "board.h"
 
 /**********************************
 Color Index
@@ -51,8 +42,8 @@ const int EPD_4IN01F_YELLOW = 0x5;	///	101
 const int EPD_4IN01F_ORANGE = 0x6;	///	110
 const int EPD_4IN01F_CLEAN = 0x7;	///	111   unavailable  Afterimage
 
-const int EPD_4IN01F_WIDTH = 640;
-const int EPD_4IN01F_HEIGHT = 400; //@TODO: Should be 448 but we get out-of-memory errors
+const int EPD_4IN01F_WIDTH = 600;
+const int EPD_4IN01F_HEIGHT = 448;//48; //@TODO: Should be 448 but we get out-of-memory errors
 
 /// - 640*448 == 280 KB for Video so < 120 KB for everything else assuming 400KB SRAM (520 for WROOM)
 
@@ -213,6 +204,8 @@ uint8_t iHighestTariff = 0;  // to store lowest tariff & time slot present in av
 bool haveLocalTime = false; //< IF we have NTP time @todo Deprecate by fixing orde rof logic/events!
 Time currentTime; //< Current time in seconds since Epoch
 
+int rssi = 0; //< Last Wifi RSSI
+
 long int nextTariffUpdate = 0;                  // used to store millis() of last tariff update
 const int tariffUpdateIntervalSec = 60 * 60 ;  // millis() between successive tariff updates from Octopus (3600000ms = 1h, 10800s = 3h, 14400s = 4h)
 const int tariffRetryIntervalSec = 30 ; //< Prevent API spamming for retries
@@ -306,13 +299,39 @@ int colourForTariff( float tariff )
   return tariffColours[i];
 }
 
+#if HAS_BATTERY
+uint8_t getBatteryPercent(void)
+{
+    float voltage = analogRead( BATTERY_PIN ) / 4096.0 * 7.46; 
+    uint8_t percentage = 100; 
+    if (voltage > 1)
+    { 
+      // Only display if there is a valid reading 
+      Serial.println("Voltage = " + String(voltage)); 
+
+      //TODO: update polynomial and remove need for pow!
+      percentage = 2836.9625f * std::pow(voltage, 4) 
+        - 43987.4889f * std::pow(voltage, 3) 
+        + 255233.8134f * std::pow(voltage, 2)
+        - 656689.7123f * voltage 
+        + 632041.7303f; 
+      if (voltage >= 4.20) 
+        percentage = 100; 
+      if (voltage <= 3.50) 
+        percentage = 0; 
+        
+      Serial.println("Percentage = " + String(percentage)); 
+    }
+    return percentage;
+}
+#endif
 
 void setup()
  {
   
   // initialize digital pin LED_PIN as an output.
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH);  // turn the LED on
+  digitalWrite(LED_PIN, LED_ON);  // turn the LED on
 
   //Initialize serial and wait for port to open:
   Serial.begin(115200);
@@ -366,6 +385,8 @@ void loop() {
     {
       tariff.numRecords = 0; //< Clear stale data
 
+      esp_wifi_sta_get_rssi(&rssi);
+      
       getOctopusTariff();  
 
       if ( tariff.numRecords != 0)  
@@ -466,9 +487,11 @@ void loop() {
       Serial.print(timeToRefresh);
       Serial.println(" seconds.");
       Serial.flush(); 
-      digitalWrite(LED_PIN, LOW);   // turn the LED off by making the voltage LOW
+      digitalWrite(LED_PIN, !LED_ON);   // turn the LED off by making the voltage LOW
 
       nextDisplayUpdate = millis() + (timeToRefresh * 1000);
+      
+      esp_sleep_enable_ext0_wakeup((gpio_num_t)BUTTON_PIN, LOW);
       esp_deep_sleep( timeToRefresh * 1000 * 1000);
   }
 } 
@@ -621,11 +644,34 @@ void drawStats()
   localtime_r(&posixCurrentTime, &timeinfo);
   //Serial.println(&timeinfo, "%A, %B %d %Y %H:%M:%S");
   
+  display.setFont(nullptr); //< default
+  display.setTextSize(2);
+  display.setTextColor(SCREEN_BLACK);
+
+  #if HAS_BATTERY
+  display.setCursor(SCREEN_WIDTH-115, 4);
+  display.print("Batt ");
+  display.print(getBatteryPercent());
+  display.print("%");
+  #endif
+  
+  display.setCursor(SCREEN_WIDTH-115, 34);
+  
+  display.print("Rssi ");
+  display.print(rssi);
+  //RSSI > -30 dBm	 Amazing
+  //RSSI < – 55 dBm	 Very good signal
+  //RSSI < – 67 dBm	 Fairly Good
+  //RSSI < – 70 dBm	 Okay
+  //RSSI < – 80 dBm	 Not good
+  //RSSI < – 90 dBm	 Extremely weak signal (unusable)
+
   display.setFont(&FreeSansBold12pt7b);
   display.setTextSize(1);
   display.setTextColor(SCREEN_BLACK);
   display.setCursor(0, 16);
-  display.println(&timeinfo, "%A, %B %d @ %H:%M:%S");
+  display.print(&timeinfo, "%A, %B %d @ %H:%M:%S");
+  
   
   display.setCursor(0, 70); //< TODO: Why gfx isn;t working this out correctly!?
   display.setTextSize(2);
