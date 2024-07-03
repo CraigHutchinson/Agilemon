@@ -5,11 +5,15 @@
 #include <WiFiClientSecure.h>
 #include <esp_crt_bundle.h>
 #include <ssl_client.h>
-#include <ArduinoJson.h>
+
+#define RAPIDJSON_DEFAULT_ALLOCATOR ::rapidjson::CrtAllocator
+#include <rapidjson/document.h>
+#include <rapidjson/error/en.h>
 #include <SPI.h>
 #include <Wire.h>
 #include <Adafruit_GFX.h>
 #include <limits>
+#include <vector> //< TODO: Remove?
 #include <algorithm> //< std::clamp
 
 
@@ -45,7 +49,7 @@ const int EPD_4IN01F_YELLOW = 0x5;	///	101
 const int EPD_4IN01F_ORANGE = 0x6;	///	110
 const int EPD_4IN01F_CLEAN = 0x7;	///	111   unavailable  Afterimage
 
-#if 0
+#if 1
 /// - 600*448 == 256 KB for Video so < 150 KB for everything else assuming 400KB SRAM (520 for WROOM)
 const int EPD_4IN01F_WIDTH = 640;
 const int EPD_4IN01F_HEIGHT = 400;
@@ -75,9 +79,9 @@ const bool headless = false; //< Run without display
 ColourEPaper display(
     SCREEN_WIDTH
   , SCREEN_HEIGHT
-  , RST_PIN
-  , DC_PIN
-  , BUSY_PIN);
+  , EPD_RESET
+  , EPD_DC
+  , EPD_BUSY);
 
 void getOctopusTariff();             // Get Octopus Data
 void timeavailable(struct timeval* t);  // Callback function (get's called when time adjusts via NTP)
@@ -139,11 +143,10 @@ const int tariffUpdateIntervalSec = 60 * 60 ;  // millis() between successive ta
 const int tariffRetryIntervalSec = 30 ; //< Prevent API spamming for retries
 
 const int displayMinimumUpdateInterval = 30; /// Don't update display faster than this
-const int displayUpdateIntervalSec = 15 * 60;             // interval between checks of current tariff data against tariffThreshold
+const int displayUpdateIntervalSec =  15 * 60;             // interval between checks of current tariff data against tariffThreshold
 long int nextDisplayUpdate = 0;
 
 WiFiClientSecure client;
-JsonDocument doc;
 
 /** STA driver started
 */
@@ -230,7 +233,7 @@ int colourForTariff( float tariff )
 #if HAS_BATTERY
 uint8_t getBatteryPercent(void)
 {
-    float voltage = analogRead( BATTERY_PIN ) / 4096.0 * 7.46; 
+    float voltage = analogRead( BATTERY_ADC ) / 4096.0 * 7.46; 
     uint8_t percentage = 100; 
     if (voltage > 1)
     { 
@@ -269,13 +272,16 @@ void setup()
     display.cp437(true); //< Use correct character tables
     display.setTextWrap(false); 
     
-    if ( !display.begin(SCLK_PIN, DIN_PIN, CS_PIN)) {
+    if ( !display.begin(SPI_SCLK, SPI_MOSI, EPD_CS)) {
       Serial.println(F("ePaper allocation failed"));
       for (;;);  // Don't proceed, loop forever
     }
   }
 
-  //display.test();
+      Serial.println(F("testing display"));
+  display.test();
+      Serial.println(F("testing done"));
+
   
   // Time Setup
   sntp_set_time_sync_notification_cb(timeavailable);
@@ -294,6 +300,9 @@ void setup()
   WiFi.onEvent(WiFiGotIP, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_GOT_IP);
   WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);  
   WiFi.onEvent(WiFiStationStopped, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_STOP);
+
+  
+  display.waitForScreenBlocking();
 }
 
 //**************************************
@@ -475,6 +484,8 @@ void getOctopusTariff()  // Get Octopus Data
   client.println("Connection: close");
   client.println();
   
+  const auto contentLengthTag = "Content-Length";
+  size_t contentLength = 0;
   //
   while (client.connected()) {
     String response = client.readStringUntil('\n');
@@ -491,54 +502,83 @@ void getOctopusTariff()  // Get Octopus Data
         ...
         \r
       */
+     // Serial.printf("Response= %s\n", response.c_str() );
+      // TODO: CHeck the headers and read `Content-Length` etc
+    if ( contentLength == 0 && response.startsWith( contentLengthTag ) )
+    {
+      const auto contentLengthStr = response.c_str() + strlen(contentLengthTag) + 2; //< +2 to skip ": "
+      contentLength = atoi(contentLengthStr);
+      
+      Serial.printf("Got Content-Length = %u\n", contentLength );
+    }
+    else
     if (response == "\r") {
       Serial.println("headers received");
-      // TODO: CHeck the headers and read `Content-Length` etc
       break;
     }
+  }
+
+  if ( contentLength == 0 )
+  {
+      Serial.println("FAILED: Didn't get 'Content-Length' header");
+    client.stop();
+    return;
   }
 
   //Await receipt of data
   while( client.connected() && !client.available() );
   
   // Poll for data while connected
-  String line;
+  std::vector<char> json;
+  json.resize(contentLength);
+
+  auto iCursor = json.data();
+  const auto iCursorEnd = iCursor + contentLength;
   do
   {
-    yield();
-    if ( client.available())
-      line += client.readString();
+    const auto remain = iCursorEnd-iCursor;
+    const auto available = client.available();
+    iCursor += client.readBytes( iCursor, std::min(remain,available) );
   }
-  while( client.connected() || client.available() ); //< While connected and more data to be received
+  while( iCursor != iCursorEnd && (client.connected() || client.available()) ); //< While connected and more data to be received
 
   client.stop();
 
-  // Serial.println(line);
-  DeserializationError error = deserializeJson(doc, line);
-  if (error) {
-    Serial.print(F("deserializing JSON failed"));
-    Serial.println(error.f_str());
-    Serial.println("Here's the JSON I tried to parse");
-    Serial.println(line);
+
+  rapidjson::Document doc;
+      Serial.println("About to parse JSON");
+  rapidjson::ParseResult parseOk = doc.Parse( (char*)json.data(), contentLength );
+  if (!parseOk) 
+  {
+      Serial.printf( "JSON parse error: %s (%u)\n"
+          , rapidjson::GetParseError_En(parseOk.Code())
+          , static_cast<unsigned>(parseOk.Offset()) );
+          
+    Serial.println("JSON was:");
+    Serial.write( json.data(), contentLength );
   }
   else 
   {
-    auto results = doc["results"];
-    // We only consider the first X records as they ar eprovided latest to oldest
+      Serial.println("JSON OK");
+
+    const auto& results = doc["results"].GetArray();
+
+      Serial.println("got results");
+    // We only consider the first X records as they are provided latest to oldest
     // @note We only need 48 for a 24hr period
-    tariff.numRecords = std::min( results.size(), (size_t)Tariff::MaxRecords );
+    tariff.numRecords = std::min( (size_t)results.Size(), (size_t)Tariff::MaxRecords );
     
     Serial.print("# of Records is ");
     Serial.println(tariff.numRecords);
     
     for ( int i =0; i < tariff.numRecords; ++i )
     {
-      auto resultRate = results[i];
-      float price = resultRate["value_inc_vat"];
+      const auto& resultRate = results[i];
+      const float price = resultRate["value_inc_vat"].GetFloat();
       tariff.prices[i] = price;
-      String periodStart = resultRate["valid_from"];
+      const auto periodStart = resultRate["valid_from"].GetString();
       struct tm tmpTime;
-      strptime(periodStart.c_str(), "%Y-%m-%dT%H:%M:%SZ", &tmpTime);
+      strptime(periodStart, "%Y-%m-%dT%H:%M:%SZ", &tmpTime);
       tmpTime.tm_isdst = false;
       tariff.startTimes[i] = mktime(&tmpTime);
       
