@@ -52,7 +52,7 @@ const int EPD_4IN01F_HEIGHT = 400;
 #else //5.65 inch AC057TC1
 /// - 600*448 == 262 KB for Video so < 138 KB for everything else assuming 400KB SRAM (520 for WROOM)
 const int EPD_4IN01F_WIDTH = 600;
-const int EPD_4IN01F_HEIGHT = 448;
+const int EPD_4IN01F_HEIGHT = 440; //< Free up 8 lines for JSON parsing?
 #endif
 
 
@@ -373,7 +373,8 @@ void loop() {
           
 #if 1
       // Find the soonest low before the high or low we know about
-      auto nextLowWindow = std::max( iLowestTariff, iHighestTariff) +1;
+      // + (iCurrentTariff/5) to avoid overlapping the current min/max
+      auto nextLowWindow = std::max( iLowestTariff, iHighestTariff) + (iCurrentTariff/5);
       if ( iCurrentTariff - nextLowWindow > 4 ) //< TODO: Should be time or generlly just better selection of a wide enough window
       {
         auto itNextLow = std::min_element( tariff.prices+nextLowWindow, tariff.prices+iCurrentTariff );
@@ -500,13 +501,15 @@ void getOctopusTariff()  // Get Octopus Data
   //Await receipt of data
   while( client.connected() && !client.available() );
   
-  // Wait for data bytes to be received
+  // Poll for data while connected
   String line;
   do
   {
-    line += client.readString();
+    yield();
+    if ( client.available())
+      line += client.readString();
   }
-  while( client.connected() /* && client.available()*/ ); //< While connected and more data to be received
+  while( client.connected() || client.available() ); //< While connected and more data to be received
 
   client.stop();
 
@@ -771,7 +774,7 @@ void drawGraph()
     const int left = 0;
     const int top = SCREEN_HEIGHT / 2;
     const int w = SCREEN_WIDTH;
-    const int h = SCREEN_HEIGHT / 2 - 25;
+    const int h = SCREEN_HEIGHT / 2 - 50;
 
     //  display.drawLine(0, 15, 0, 63, SCREEN_BLACK);  // Draw Axes
     display.drawLine(left, top + h, w, top + h, SCREEN_BLACK);
