@@ -291,46 +291,19 @@ void ColourEPaper::test()
 
     writeSPI(0x10, true);
 
-    for (int j = 0; j < HEIGHT; j++)
+    const uint8_t bars[9] = { 0x0, 0x11, 0x22, 0x33, 0x44, 0x55, 0x66, 0x77, 0x77 }; 
+    const int16_t barWidth = WIDTH/8;
+
+    for (int16_t j = 0; j < HEIGHT; j++)
     {
-        for (int i = 0; i < WIDTH/2/8; ++i)
+        for (int16_t i = 0; i < WIDTH; )
         {
-            writeSPI(0x0, false);
-        }
-
-        for (int i = 0; i < WIDTH/2/8; ++i)
-        {
-            writeSPI(0x11, false);
-        }
-
-        for (int i = 0; i < WIDTH/2/8; ++i)
-        {
-            writeSPI(0x22, false);
-        }
-
-        for (int i = 0; i < WIDTH/2/8; ++i)
-        {
-            writeSPI(0x33, false);
-        }
-
-        for (int i = 0; i < WIDTH/2/8; ++i)
-        {
-            writeSPI(0x44, false);
-        }
-
-        for (int i = 0; i < WIDTH/2/8; ++i)
-        {
-            writeSPI(0x55, false);
-        }
-
-        for (int i = 0; i < WIDTH/2/8; ++i)
-        {
-            writeSPI(0x66, false);
-        }
-
-        for (int i = 0; i < WIDTH/2/8; ++i)
-        {
-            writeSPI(0x77, false);
+            const int16_t barEnd = std::min( int16_t(i + barWidth), WIDTH);
+            const uint8_t barColour  = bars[i/barWidth];
+            for ( ; i < barEnd; i += 2 )
+            {
+                writeSPI( barColour, false);
+            }
         }
     }
     
