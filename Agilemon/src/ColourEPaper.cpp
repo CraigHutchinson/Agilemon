@@ -195,19 +195,7 @@ bool ColourEPaper::frameBufferAndInit()
 void ColourEPaper::display(void)
 {
     spi->beginTransaction(spiSettingsObject);
-    writeSPI(0x61, true); // Set Resolution setting
-
-    //0x02, 0x80, 0x01,0x90 = 600x400
-    char resolution[4] = {
-         char(WIDTH>>8), char(WIDTH & 0xFF),
-         char(HEIGHT>>8), char(HEIGHT & 0xFF),
-    };
-
-    //Data
-    digitalWrite(dcPin, HIGH);
-    digitalWrite(csPin, LOW);
-    spi->transfer( resolution, sizeof(resolution) );
-    digitalWrite(csPin, HIGH);
+    setResolution();
 
     writeSPI(0x10, true);
     if (debugOn)
@@ -238,6 +226,22 @@ void ColourEPaper::display(void)
     writeSPI(0x12, true);
 
     // either block until screen finishes (waitForScreenBlocking) or do something else and then send POF + endtransaction yourself once busy is high (checkBusy + sendPOFandLeaveSPI)
+}
+void ColourEPaper::setResolution()
+{
+    writeSPI(0x61, true); // Set Resolution setting
+
+    //0x02, 0x80, 0x01,0x90 = 600x400
+    char resolution[4] = {
+         char(WIDTH>>8), char(WIDTH & 0xFF),
+         char(HEIGHT>>8), char(HEIGHT & 0xFF),
+    };
+
+    //Data
+    digitalWrite(dcPin, HIGH);
+    digitalWrite(csPin, LOW);
+    spi->transfer( resolution, sizeof(resolution) );
+    digitalWrite(csPin, HIGH);
 }
 void ColourEPaper::clearDisplay(void)
 {
@@ -277,83 +281,71 @@ void ColourEPaper::drawPixel(int16_t x, int16_t y, uint16_t color)
 
 void ColourEPaper::test()
 {
+    Serial.println("EPD::Test - Screen BARS Started");
     // used for testing begin function
     // This function writes bars of each colour to the screen. Use blocking wait function or do it manually with check busy and POF+SPIShutdown
     spi->beginTransaction(spiSettingsObject);
-    writeSPI(0x61, true); // Set Resolution setting
-
-    //0x02, 0x80, 0x01,0x90 = 600x400
-    char resolution[4] = {
-         char(WIDTH>>8), char(WIDTH & 0xFF),
-         char(HEIGHT>>8), char(HEIGHT & 0xFF),
-    };
-
-    //Data
-    digitalWrite(dcPin, HIGH);
-    digitalWrite(csPin, LOW);
-    spi->transfer( resolution, sizeof(resolution) );
-    digitalWrite(csPin, HIGH);
+    
+    setResolution();
+    Serial.println("EPD::Test - Resolution set");
 
     writeSPI(0x10, true);
 
     for (int j = 0; j < HEIGHT; j++)
     {
-
-        for (int i = 0; i < WIDTH/8; i+2)
+        for (int i = 0; i < WIDTH/2/8; ++i)
         {
             writeSPI(0x0, false);
         }
 
-        for (int i = 0; i < WIDTH/8; i+2)
+        for (int i = 0; i < WIDTH/2/8; ++i)
         {
             writeSPI(0x11, false);
         }
 
-        for (int i = 0; i < WIDTH/8; i+2)
+        for (int i = 0; i < WIDTH/2/8; ++i)
         {
             writeSPI(0x22, false);
         }
 
-        for (int i = 0; i < WIDTH/8; i+2)
+        for (int i = 0; i < WIDTH/2/8; ++i)
         {
             writeSPI(0x33, false);
         }
 
-        for (int i = 0; i < WIDTH/8; i+2)
+        for (int i = 0; i < WIDTH/2/8; ++i)
         {
             writeSPI(0x44, false);
         }
 
-        for (int i = 0; i < WIDTH/8; i+2)
+        for (int i = 0; i < WIDTH/2/8; ++i)
         {
             writeSPI(0x55, false);
         }
 
-        for (int i = 0; i < WIDTH/8; i+2)
+        for (int i = 0; i < WIDTH/2/8; ++i)
         {
             writeSPI(0x66, false);
         }
 
-        for (int i = 0; i < WIDTH/8; i+2)
+        for (int i = 0; i < WIDTH/2/8; ++i)
         {
             writeSPI(0x77, false);
         }
     }
-    if (debugOn)
-    {
-        Serial.println("Sent all clear commands. Refreshing screen");
-    }
+    
+    Serial.println("EPD::Test - Sent all clear commands. Refreshing screen");
+    
     writeSPI(0x04, true);
     if (!(busyHigh()))
     {
-        if (debugOn)
-        {
-            Serial.println("BusyHigh1 failed");
-        }
+        Serial.println("EPD::Test - BusyHigh1 failed");
     }
     writeSPI(0x12, true);
 
-    // either block until screen finishes (waitForScreenBlocking) or do something else and then send POF + endtransaction yourself once busy is high (checkBusy + sendPOFandLeaveSPI)
+    Serial.println("EPD::Test - Waiting for screen");
+    waitForScreenBlocking();
+    Serial.println("EPD::Test - Testing COMPLETE");
 }
 
 void ColourEPaper::writeSPI(uint8_t something, bool command)

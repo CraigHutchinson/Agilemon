@@ -37,6 +37,7 @@ protected:
     void resetScreen(void);
     bool busyHigh(void);
     bool busyLow(void);
+    void setResolution();
     SPIClass *spi;
     SPISettings spiSettingsObject;
     char *buffer1 = NULL;
