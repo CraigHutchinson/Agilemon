@@ -15,7 +15,7 @@
 #include <limits>
 #include <vector> //< TODO: Remove?
 #include <algorithm> //< std::clamp
-
+#include <nvs_flash.h> //< Erase flash!
 
 #include "Tariff.hpp"
 #include "Time24.hpp"
@@ -50,14 +50,14 @@ const int EPD_4IN01F_YELLOW = 0x5;	///	101
 const int EPD_4IN01F_ORANGE = 0x6;	///	110
 const int EPD_4IN01F_CLEAN = 0x7;	///	111   unavailable  Afterimage
 
-#if 1 //4.01 
+#if 0 //4.01 
 /// - 600*448 == 256 KB for Video so < 150 KB for everything else assuming 400KB SRAM (520 for WROOM)
 const int EPD_4IN01F_WIDTH = 640;
 const int EPD_4IN01F_HEIGHT = 400;
 #else //5.65 inch AC057TC1
 /// - 600*448 == 262 KB for Video so < 138 KB for everything else assuming 400KB SRAM (520 for WROOM)
 const int EPD_4IN01F_WIDTH = 600;
-const int EPD_4IN01F_HEIGHT = 440; //< Free up 8 lines for JSON parsing?
+const int EPD_4IN01F_HEIGHT = 448; //< Free up 8 lines for JSON parsing?
 #endif
 
 
@@ -142,6 +142,7 @@ int rssi = 0; //< Last Wifi RSSI
 long int nextTariffUpdate = 0;                  // used to store millis() of last tariff update
 const int tariffUpdateIntervalSec = 60 * 60 ;  // millis() between successive tariff updates from Octopus (3600000ms = 1h, 10800s = 3h, 14400s = 4h)
 const int tariffRetryIntervalSec = 30 ; //< Prevent API spamming for retries
+const int wifiRetryIntervalSec = 1; //< Prevent continous wifi retry
 
 const int displayMinimumUpdateInterval = 30; /// Don't update display faster than this
 const int displayUpdateIntervalSec =  15 * 60;             // interval between checks of current tariff data against tariffThreshold
@@ -149,13 +150,23 @@ long int nextDisplayUpdate = 0;
 
 WiFiClientSecure client;
 
-/** STA driver started
-*/
-void WiFiStationStarted(WiFiEvent_t event, WiFiEventInfo_t info)
+
+void doWiFiConnect()
 {
   Serial.print("WiFi started, connecting to SSID: ");
   Serial.println(wifiSsid);  
   WiFi.begin(wifiSsid, wifiPassword);
+
+#if 0 //TODO: May have some use
+  WiFi.setTxPower(WIFI_POWER_8_5dBm);             //https://www.wemos.cc/en/latest/tutorials/c3/get_started_with_arduino_c3.html#wifi
+#endif
+}
+
+/** STA driver started
+*/
+void WiFiStationStarted(WiFiEvent_t event, WiFiEventInfo_t info)
+{
+  doWiFiConnect();
 }
 
 void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info)
@@ -163,32 +174,44 @@ void WiFiStationConnected(WiFiEvent_t event, WiFiEventInfo_t info)
   //TODO: arduino_event_info_t
   Serial.print("Connected to Wifi on: ");
   Serial.println(wifiSsid);
+  nextTariffUpdate = 0;
 }
+
 
 void WiFiGotIP(WiFiEvent_t event, WiFiEventInfo_t info)
 {
   Serial.println("Got DHCP IP address: ");
   Serial.println(WiFi.localIP());
+  nextTariffUpdate = 0;
 }
 
 void WiFiStationDisconnected(WiFiEvent_t event, WiFiEventInfo_t info)
 {
-  wifi_err_reason_t reason = (wifi_err_reason_t)info.wifi_sta_disconnected.reason;
+  const auto& disconnect = info.wifi_sta_disconnected;
+  wifi_err_reason_t reason = (wifi_err_reason_t)disconnect.reason;
 
-  Serial.print("WiFi AP diconnected. Reason: ");
-  Serial.print(reason);
-  Serial.print(" = ");
-  Serial.println(WiFi.disconnectReasonName(reason));
+  Serial.printf("WiFi AP '%s' [%02X:%02X:%02X:%02X:%02X:%02X] disconnected: RSSI = %i, Reason = %s[%i]\n"
+           , wifiSsid
+           , disconnect.bssid[0], disconnect.bssid[1], disconnect.bssid[2]
+           , disconnect.bssid[3], disconnect.bssid[4], disconnect.bssid[5]
+           , (int)disconnect.rssi
+           , WiFi.disconnectReasonName(reason)
+           , reason);
+           
   //TODO:
-   // - NO_AP_FOUND == SSID isn't available
+  // - NO_AP_FOUND == SSID isn't available
 
   // If not left by choice....
-   if ( reason != WIFI_REASON_ASSOC_LEAVE )
-   {
-      Serial.print("WiFi connect failed to: ");
-      Serial.println(wifiSsid);  
-      nextTariffUpdate += tariffRetryIntervalSec * 1000; //< Delay between retry on connection failure 
-      WiFi.reconnect();
+  if ( reason != WIFI_REASON_ASSOC_LEAVE )
+  {
+    nextTariffUpdate += wifiRetryIntervalSec * 1000; //< Delay between retry on connection failure 
+
+    //Clear saved WiFi to resolve `AUTH_EXPIRE` loop - Didn't work!
+    if ( reason == WIFI_REASON_AUTH_EXPIRE )
+    {
+      WiFi.disconnect(false,true);
+      doWiFiConnect();
+    }    
   }
 }
 
@@ -268,6 +291,16 @@ void setup()
   //Initialize serial and wait for port to open:
   Serial.begin(115200);
 
+  #if 0 // AUTH_EXPIRE fix by clearing flash - Didn't work!
+  
+      Serial.println(F("ERASING FLASH"));
+      ESP_ERROR_CHECK(nvs_flash_erase());
+      
+      Serial.println(F("FLASH ERASED"));
+      ESP.restart();
+
+#endif
+
   if (!headless)
   {    
     display.cp437(true); //< Use correct character tables
@@ -299,8 +332,6 @@ void setup()
   WiFi.onEvent(WiFiStationDisconnected, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_DISCONNECTED);  
   WiFi.onEvent(WiFiStationStopped, WiFiEvent_t::ARDUINO_EVENT_WIFI_STA_STOP);
 
-  
-  display.waitForScreenBlocking();
 }
 
 //**************************************
@@ -310,6 +341,7 @@ void loop() {
   if (nextTariffUpdate == 0 
     || millis() >= nextTariffUpdate )  // update Octopus tariff periodically
   {
+      //Serial.println("loop::Update");
     if ( WiFi.getMode() == WIFI_OFF )
     {    
       WiFi.mode( WIFI_STA );
@@ -320,6 +352,7 @@ void loop() {
     if ( haveLocalTime 
       && wifiStatus == WL_CONNECTED )
     {
+      Serial.println("loop::gettariff");
       tariff.numRecords = 0; //< Clear stale data
 
       esp_wifi_sta_get_rssi(&rssi);
