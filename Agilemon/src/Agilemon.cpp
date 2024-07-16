@@ -18,6 +18,7 @@
 
 
 #include "Tariff.hpp"
+#include "Time24.hpp"
 
 //TODO: Migrate to using SDF text rendering - smoother  scaling + reduced memory usage goals
 //https://learn.adafruit.com/adafruit-gfx-graphics-library/using-fonts
@@ -49,7 +50,7 @@ const int EPD_4IN01F_YELLOW = 0x5;	///	101
 const int EPD_4IN01F_ORANGE = 0x6;	///	110
 const int EPD_4IN01F_CLEAN = 0x7;	///	111   unavailable  Afterimage
 
-#if 1
+#if 1 //4.01 
 /// - 600*448 == 256 KB for Video so < 150 KB for everything else assuming 400KB SRAM (520 for WROOM)
 const int EPD_4IN01F_WIDTH = 640;
 const int EPD_4IN01F_HEIGHT = 400;
@@ -278,10 +279,7 @@ void setup()
     }
   }
 
-      Serial.println(F("testing display"));
   display.test();
-      Serial.println(F("testing done"));
-
   
   // Time Setup
   sntp_set_time_sync_notification_cb(timeavailable);
@@ -601,33 +599,6 @@ void getOctopusTariff()  // Get Octopus Data
   }
 }
 
-/** 24-hour clock time as HH:MM
-*/
-struct Time24
-{
-    uint8_t hour;
-    uint8_t minute;
-
-    /** Duration as clock time HH:MM where the hours are not wrapped after 24 hours e.g. 35:59 for example for > 1 day
-    */
-    static Time24 fromSecondsDuration( uint32_t durationSeconds )
-    {
-        const auto durationMinutes = ((durationSeconds + 30) / 60); //< Round to nearest minute
-        uint8_t hour = static_cast<uint8_t>(durationMinutes / 60);
-        uint8_t minute = static_cast<uint8_t>(durationMinutes - (hour * 60));
-        return { hour, minute };
-    }
-
-    /** Duration as clock time HH:MM within the 24-hour clock period from 0:00 to 23:59
-    */
-    static Time24 fromSecondsTimepoint( uint32_t timepointSeconds )
-    {
-      auto t = fromSecondsDuration(timepointSeconds);
-      if ( t.hour >= 24 )
-        t.hour -= (t.hour/24) * 24; //< Wrap hour on 24 hour clock
-      return t;
-    }
-};
 
 void drawStats()
 {    
