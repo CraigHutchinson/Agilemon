@@ -54,11 +54,18 @@ const int EPD_4IN01F_CLEAN = 0x7;	///	111   unavailable  Afterimage
 /// - 600*448 == 256 KB for Video so < 150 KB for everything else assuming 400KB SRAM (520 for WROOM)
 const int EPD_4IN01F_WIDTH = 640;
 const int EPD_4IN01F_HEIGHT = 400;
-#else //5.65 inch AC057TC1
+#elif 1 //5.65 inch AC057TC1
 /// - 600*448 == 262 KB for Video so < 138 KB for everything else assuming 400KB SRAM (520 for WROOM)
 const int EPD_4IN01F_WIDTH = 600;
 const int EPD_4IN01F_HEIGHT = 448; //< Free up 8 lines for JSON parsing?
+#else //5.65 inch AC057TC1 PORTRAIT
+/// - 600*448 == 262 KB for Video so < 138 KB for everything else assuming 400KB SRAM (520 for WROOM)
+const int EPD_4IN01F_WIDTH = 448 - 48; //< Free up 8 lines for JSON parsing?
+const int EPD_4IN01F_HEIGHT = 600;
 #endif
+
+// COnfigure WiFI for Rx-Priority?
+//https://docs.espressif.com/projects/esp-idf/en/latest/esp32/api-guides/wifi.html#wifi-buffer-usage
 
 
 const int SCREEN_WIDTH = EPD_4IN01F_WIDTH;     // OLED display width, in pixels
@@ -73,21 +80,10 @@ const int SCREEN_YELLOW = EPD_4IN01F_YELLOW;
 const int SCREEN_ORANGE = EPD_4IN01F_ORANGE;
 const int SCREEN_CLEAN = EPD_4IN01F_CLEAN;
 
-const bool headless = false; //< Run without display
-// Display Scehmatic https://files.waveshare.com/upload/b/bb/4.01inch_e-Paper_HAT_%28F%29.pdf
-// Reference design https://files.waveshare.com/upload/f/f0/4.01inch-ePaper-F-Reference-Design.pdf
-// - Good Display datasheet https://www.good-display.com/product/381.html
-ColourEPaper display(
-    SCREEN_WIDTH
-  , SCREEN_HEIGHT
-  , EPD_RESET
-  , EPD_DC
-  , EPD_BUSY);
-
 void getOctopusTariff();             // Get Octopus Data
 void timeavailable(struct timeval* t);  // Callback function (get's called when time adjusts via NTP)
-void drawStats();                      // Routine Refresh of Display
-void drawGraph();                       // Draw tariff graph
+void drawStats(ColourEPaper& display);                      // Routine Refresh of Display
+void drawGraph(ColourEPaper& display);                       // Draw tariff graph
 
 const char* server = "api.octopus.energy";  // Server URL
 const char* ntpServer1 = "pool.ntp.org";
@@ -125,14 +121,13 @@ const char* octopus =
   "VsyuLAOQ1xk4meTKCRlb/weWsKh/NEnfVqn3sF/tM+2MR7cwA130A4w=\n"
   "-----END CERTIFICATE-----\n";
 
-
 Tariff tariff;
 
-uint8_t iCurrentTariff = 0;// to hold live tariff for display
-uint8_t iLowestTariff = 0;  // to store lowest tariff & time slot present in available data
-uint8_t iHighestTariff = 0;  // to store lowest tariff & time slot present in available data
+uint8_t iCurrentTariff = 255;// to hold live tariff for display
+uint8_t iLowestTariff = 255;  // to store lowest tariff & time slot present in available data
+uint8_t iHighestTariff = 255;  // to store lowest tariff & time slot present in available data
 
-uint8_t iNextLow = 0;
+uint8_t iNextLow = 255;
 
 bool haveLocalTime = false; //< IF we have NTP time @todo Deprecate by fixing orde rof logic/events!
 Time currentTime; //< Current time in seconds since Epoch
@@ -148,8 +143,145 @@ const int displayMinimumUpdateInterval = 30; /// Don't update display faster tha
 const int displayUpdateIntervalSec =  15 * 60;             // interval between checks of current tariff data against tariffThreshold
 long int nextDisplayUpdate = 0;
 
-WiFiClientSecure client;
+#if 0 //TODO: C++23 expected type usage!
+template <class _Ty, class _Err>
+class expected 
+{
+    /*... lots of code ... */
+    
+    union {
+        _Ty value;
+        _Err unexpceted;
+    };
+    bool hasValue;
+};
+#endif
 
+// WIP: Deprecate use of arduino
+#if 0 //< Use ESP TLS https://github.com/espressif/esp-idf/blob/master/examples/protocols/https_request/main/https_request_example_main.c
+#include "esp_tls.h"
+esp_tls_t
+#endif
+class ExWiFiClientSecure : public WiFiClientSecure
+{
+public:
+  
+  int sslReceive( uint8_t* buffer, size_t bufferLength)
+  {
+    return sslReceive( sslclient->ssl_ctx, buffer, bufferLength );
+  }
+
+/** 
+ * @warn <0 is an error code @see "\mbedtls\include\mbedtls\error.h"
+ */
+  int availableCount()
+  {
+    return availableCount( sslclient->ssl_ctx );
+  }
+
+  static int handleError(int errorCode )
+  {
+    
+    if(errorCode > 0 //< SUccess codes are positive
+      || errorCode == MBEDTLS_ERR_SSL_PEER_CLOSE_NOTIFY//< Closing isn't an error - Occurs at end of payload!
+      )
+    {
+      return 0;
+    }
+
+  #ifdef MBEDTLS_ERROR_C
+      char errorBuffer[200];
+      mbedtls_strerror(errorCode, errorBuffer, sizeof(errorBuffer));
+      log_e("[mbedTLS] (%d) %s",  errorCode, errorBuffer);
+  #else
+      log_e("[mbedTLS] error: %d",  errorCode);
+  #endif
+      return errorCode;
+  }
+
+
+protected:
+
+  int availableCount(mbedtls_ssl_context& sslContext)
+  {
+#if 0//TODO: This usage isn't documented for zero sized read for whatever reason!?
+      int ret = mbedtls_ssl_read(&sslContext, NULL, 0);
+      //log_e("RET: %i",ret);   //for low level debug
+      if (ret != MBEDTLS_ERR_SSL_WANT_READ && ret != MBEDTLS_ERR_SSL_WANT_WRITE && ret < 0) {
+          return handleError(ret);
+          /** @warn MBEDTLS_ERR_SSL_CLIENT_RECONNECT == MUST STOP - security warning 
+           *  #MBEDTLS_ERR_SSL_WANT_READ,
+*                 #MBEDTLS_ERR_SSL_WANT_WRITE,
+*                 #MBEDTLS_ERR_SSL_ASYNC_IN_PROGRESS,
+*                 #MBEDTLS_ERR_SSL_CRYPTO_IN_PROGRESS or
+*                 #MBEDTLS_ERR_SSL_CLIENT_RECONNECT,
+          */
+      }
+#endif
+
+      int res = mbedtls_ssl_get_bytes_avail(&sslContext);
+      //log_e("RES: %i",res);    //for low level debug
+
+      return res;
+  }
+
+  int sslReceive(mbedtls_ssl_context& sslContext, uint8_t* buffer, size_t bufferLength)
+  {
+      //log_d( "Reading HTTP response...");   //for low level debug
+      int ret = mbedtls_ssl_read(&sslContext, buffer, bufferLength );
+
+      if ( ret <= 0 )
+      {
+        if ( ret == MBEDTLS_ERR_SSL_WANT_READ 
+          || ret == MBEDTLS_ERR_SSL_WANT_WRITE )
+        {
+          // @note Call this function again when the underlying transport is ready for the operation.
+          return 0;
+        }
+       
+        stop();
+
+        // @warn if Ret==0 internal error may have occured, we return MBEDTLS_ERR_SSL_CONN_EOF
+        return handleError(ret ? ret : MBEDTLS_ERR_SSL_CONN_EOF);
+     }
+
+      //log_v( "%d bytes read", ret);   //for low level debug
+      return ret;
+  }
+
+};
+
+
+
+#if 0 //C:\Users\New\.platformio\packages\framework-arduinoespressif32\libraries\WiFiClientSecure\src\ssl_client.h
+
+struct sslclient_context 
+{
+    int socket;
+    mbedtls_ssl_context ssl_ctx;
+    mbedtls_ssl_config ssl_conf;
+
+    mbedtls_ctr_drbg_context drbg_ctx;
+    mbedtls_entropy_context entropy_ctx;
+
+    mbedtls_x509_crt ca_cert;
+    mbedtls_x509_crt client_cert;
+    mbedtls_pk_context client_key;
+
+    unsigned long socket_timeout;
+    unsigned long handshake_timeout;
+};
+
+void sslInit(sslclient_context *ssl_client)
+{
+    // reset embedded pointers to zero
+    memset(ssl_client, 0, sizeof(sslclient_context));
+    mbedtls_ssl_init(&ssl_client->ssl_ctx);
+    mbedtls_ssl_config_init(&ssl_client->ssl_conf);
+    mbedtls_ctr_drbg_init(&ssl_client->drbg_ctx);
+}
+
+#endif
 
 void doWiFiConnect()
 {
@@ -300,19 +432,6 @@ void setup()
       ESP.restart();
 
 #endif
-
-  if (!headless)
-  {    
-    display.cp437(true); //< Use correct character tables
-    display.setTextWrap(false); 
-    
-    if ( !display.begin(SPI_SCLK, SPI_MOSI, EPD_CS)) {
-      Serial.println(F("ePaper allocation failed"));
-      for (;;);  // Don't proceed, loop forever
-    }
-  }
-
-  display.test();
   
   // Time Setup
   sntp_set_time_sync_notification_cb(timeavailable);
@@ -366,6 +485,10 @@ void loop() {
         
       //Save power by diconnecting Wifi until next needed
         WiFi.disconnect(true);
+        //esp_wifi_disconnect();
+        //esp_wifi_stop();
+        //esp_wifi_deinit();
+        
       }
       else
       {
@@ -409,7 +532,6 @@ void loop() {
       iLowestTariff = std::distance( tariff.prices, itMinmaxTariffPrice.first );
       iHighestTariff = std::distance( tariff.prices, itMinmaxTariffPrice.second );
      
-      Price pricesLoG[Tariff::MaxRecords]; 
           
 #if 1
       // Find the soonest low before the high or low we know about
@@ -422,12 +544,13 @@ void loop() {
       }
       else
       {
-        iNextLow = -1; //< Next low is lowest in tariff
+        iNextLow = 255; //< Next low is lowest in tariff
       }
 
 #else // Trough detection... TODO: sensitive to noise!
     // Laplacian of Gaussian (LoG) calculation
       // Compute the second derivative (Laplacian)
+      Price pricesLoG[Tariff::MaxRecords]; 
       for (size_t i = 1; i < iCurrentTariff - 1; ++i)
        {
           pricesLoG[i] = tariff.prices[i - 1] - 2 * tariff.prices[i] + tariff.prices[i + 1];
@@ -459,15 +582,41 @@ void loop() {
       Serial.print(iLowestTariff);
       Serial.println(")");
 
-      if (!headless)
+
+  Serial.println("Allocating display");
+      // Display Scehmatic https://files.waveshare.com/upload/b/bb/4.01inch_e-Paper_HAT_%28F%29.pdf
+      // Reference design https://files.waveshare.com/upload/f/f0/4.01inch-ePaper-F-Reference-Design.pdf
+      // - Good Display datasheet https://www.good-display.com/product/381.html
+      ColourEPaper display(
+          SCREEN_WIDTH
+        , SCREEN_HEIGHT
+        , EPD_RESET
+        , EPD_DC
+        , EPD_BUSY, SPI_SCLK, SPI_MOSI, EPD_CS);
+      
+  Serial.println("DIsplay done");
+      display.cp437(true); //< Use correct character tables
+      display.setTextWrap(false); 
+
+      display.test();
+
+      const bool headless = false; //< Run without display
+
+  Serial.println("DIsplay begin");
+      if ( !headless 
+        && display.begin())
       {
+  Serial.println("DIsplay started...");
           display.clearDisplay();
 
-          drawGraph();
-          drawStats(); //< NOTES: Stats drawn ontop
+          drawGraph( display );
+          drawStats( display ); //< NOTES: Stats drawn ontop
 
           display.display();
           display.waitForScreenBlocking();
+
+          
+  Serial.println("DIsplay finished");
       }
 
       // @notice It may take some time to read Tariff and present information so we recalcukate time here
@@ -490,6 +639,8 @@ void loop() {
 
 void getOctopusTariff()  // Get Octopus Data
 {  
+  ExWiFiClientSecure client;
+
   Serial.println("\nBegin get octopus data...");
   client.setCACert(octopus);
   Serial.println("\nStarting connection to Octopus server...");
@@ -517,15 +668,33 @@ void getOctopusTariff()  // Get Octopus Data
   
   const auto contentLengthTag = "Content-Length";
   size_t contentLength = 0;
+
+  const size_t readBufferSize = 1024*16;
+  std::unique_ptr<uint8_t[]> readBuffer(new uint8_t[readBufferSize]); //< JSON ~15500 so allocate a little more for tolerance for value changes
+
+  uint8_t* const iReadBufferBegin = &readBuffer[0];
+  uint8_t* const iReadBufferEnd = iReadBufferBegin + readBufferSize;
+  uint8_t* iReadBuffer = iReadBufferBegin;
+  uint8_t* iProcessedBuffer = iReadBufferBegin;
   //
-  while (client.connected()) {
-    String response = client.readStringUntil('\n');
-      
-      //Serial.println(response);
-      
+  while (client.connected()) 
+  {
+    int receiveResult = client.sslReceive( iReadBuffer, iReadBufferEnd - iReadBuffer );
+    if ( receiveResult < 0 )
+    {         
+      client.handleError(receiveResult) ;
+      Serial.println("FAILED: Didn't get headers");
+      return;
+    }
+    if ( receiveResult == 0)
+    {
+      yield();
+      continue; //< TODO; Timeout!
+    }
+
+    iReadBuffer += receiveResult;
+
       /**Response starts with:
-        Starting connection to Octopus server...
-        Connected to server!
         HTTP/1.1 200 OK
         Date: Tue, 30 Jan 2024 20:32:57 GMT
         Content-Type: application/json
@@ -533,17 +702,52 @@ void getOctopusTariff()  // Get Octopus Data
         ...
         \r
       */
-     // Serial.printf("Response= %s\n", response.c_str() );
-      // TODO: CHeck the headers and read `Content-Length` etc
-    if ( contentLength == 0 && response.startsWith( contentLengthTag ) )
+    while ( iProcessedBuffer < iReadBuffer )
     {
-      const auto contentLengthStr = response.c_str() + strlen(contentLengthTag) + 2; //< +2 to skip ": "
-      contentLength = atoi(contentLengthStr);
-      
-      Serial.printf("Got Content-Length = %u\n", contentLength );
+      if ( iProcessedBuffer[0] == '\r' )
+        break;
+        
+      uint8_t* const iLineEnd = (uint8_t*)memchr( (const char*)iProcessedBuffer, '\n', iReadBuffer-iProcessedBuffer);
+      if ( !iLineEnd )
+      {
+        break; //< TODO: TImeout
+      }
+
+      //Serial.printf("Got %.*s\n", iLineEnd-iProcessedBuffer, iProcessedBuffer );
+
+      if ( strncmp((const char*)contentLengthTag, (const char*)iProcessedBuffer, std::strlen(contentLengthTag) ) == 0 )
+      {
+        const auto contentLengthStr = iProcessedBuffer + std::strlen(contentLengthTag) + 2; //< +2 to skip ": "
+        contentLength = atoi((const char*)contentLengthStr);
+        
+        Serial.printf("Got Content-Length = %u\n", contentLength );
+      }
+
+      iProcessedBuffer = iLineEnd+1;
     }
-    else
-    if (response == "\r") {
+
+    const bool headersFinished = iProcessedBuffer < iReadBuffer && ( iProcessedBuffer[0] == '\r' );
+    if(headersFinished)
+    {
+      iProcessedBuffer += 2; //< Skip the '\r\n'
+    }
+    
+    // Keep unprocessed data at start of buffer
+    if ( iReadBuffer != iReadBufferEnd)
+    {
+      size_t remainCount = iReadBuffer - iProcessedBuffer;
+      memmove( iReadBufferBegin, iProcessedBuffer, remainCount );
+      iReadBuffer = iReadBufferBegin + remainCount;
+      iProcessedBuffer = iReadBufferBegin;
+    }
+    else //< BUffer is full! Line too big to process, discard and continue!
+    {
+      iProcessedBuffer = iReadBuffer = iReadBufferBegin;
+    }
+    
+    // finish
+    if(headersFinished)
+    {
       Serial.println("headers received");
       break;
     }
@@ -556,29 +760,56 @@ void getOctopusTariff()  // Get Octopus Data
     return;
   }
 
-  //Await receipt of data
-  while( client.connected() && !client.available() );
-  
-  // Poll for data while connected
-  std::vector<char> json;
-  json.resize(contentLength);
+  //Await receipt of data reusing the same buffer
+  uint8_t* const iJsonBegin = iReadBufferBegin;
+  uint8_t* const iJsonEnd = iReadBufferBegin + contentLength;
+  uint8_t* iJson = iReadBuffer;
 
-  auto iCursor = json.data();
-  const auto iCursorEnd = iCursor + contentLength;
-  do
+
+ //   Serial.printf("JSON started with: %u \n", iJson-iJsonBegin);
+  //  Serial.write( iJsonBegin, iJson-iJsonBegin );
+   // Serial.println("");
+
+  int jsonReceiveResult = 0;
+
+int  stopIt = 100;
+  while ( (jsonReceiveResult = client.sslReceive( iJson, iJsonEnd - iJson )) >= 0 )
   {
-    const auto remain = iCursorEnd-iCursor;
-    const auto available = client.available();
-    iCursor += client.readBytes( iCursor, std::min(remain,available) );
-  }
-  while( iCursor != iCursorEnd && (client.connected() || client.available()) ); //< While connected and more data to be received
+    iJson += jsonReceiveResult;
+    
+    //Serial.printf("Progress: %u of %u (+%u)\n", iJson - iJsonBegin, contentLength, jsonReceiveResult);
+    if ( iJson >= iJsonEnd)
+      break;
 
+    if ( 0 == jsonReceiveResult )
+    {
+      //int cnt = client.availableCount();
+      yield();
+      delay(200);
+    //Serial.printf("Progress: available +%u)\n", cnt );
+    }
+    if ( !--stopIt )
+    {
+      client.stop();
+      return;
+    }
+
+  }
+  //  }
+  //while( iCursor != iCursorEnd && (client.connected() || client.availableCount()) ); //< While connected and more data to be received
+
+  
   client.stop();
 
+  if ( client.handleError(jsonReceiveResult) )
+  {
+    Serial.printf("FAILED: Didn't get all our data %u of %u\n", iJson - iJsonBegin, contentLength);
+    return;
+  }
 
   rapidjson::Document doc;
       Serial.println("About to parse JSON");
-  rapidjson::ParseResult parseOk = doc.Parse( (char*)json.data(), contentLength );
+  rapidjson::ParseResult parseOk = doc.Parse( (char*)iJsonBegin, contentLength );
   if (!parseOk) 
   {
       Serial.printf( "JSON parse error: %s (%u)\n"
@@ -586,7 +817,7 @@ void getOctopusTariff()  // Get Octopus Data
           , static_cast<unsigned>(parseOk.Offset()) );
           
     Serial.println("JSON was:");
-    Serial.write( json.data(), contentLength );
+    Serial.write( iJsonBegin, contentLength );
   }
   else 
   {
@@ -596,7 +827,7 @@ void getOctopusTariff()  // Get Octopus Data
 
       Serial.println("got results");
     // We only consider the first X records as they are provided latest to oldest
-    // @note We only need 48 for a 24hr period
+    // @note We only need 48 for a 24hr period but we actually need 62 as the data is published at 4pm fupto 10:30 the next day
     tariff.numRecords = std::min( (size_t)results.Size(), (size_t)Tariff::MaxRecords );
     
     Serial.print("# of Records is ");
@@ -633,7 +864,7 @@ void getOctopusTariff()  // Get Octopus Data
 }
 
 
-void drawStats()
+void drawStats( ColourEPaper& display)
 {    
   Serial.print("Updating display...");
 
@@ -731,7 +962,7 @@ struct BoxX
   uint16_t h;
 };
 
-static struct BoxX centerAlignText( const char* text, uint16_t xCenter )
+static struct BoxX centerAlignText( ColourEPaper& display, const char* text, uint16_t xCenter )
 {
   int16_t pad = 4;
   int16_t left= pad;
@@ -747,7 +978,7 @@ static struct BoxX centerAlignText( const char* text, uint16_t xCenter )
   return {xText, w, h};
 }
 
-void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
+void drawTariffMarker( ColourEPaper& display, const Time currentDayStart, uint xCoeff, uint yTariff
     , int iTariff, int colour)
 {
     const auto markerHeight = 15;
@@ -774,7 +1005,7 @@ void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
       , time24.minute );
     {
         display.setFont(&FreeSans9pt7b); 
-        auto  pos = centerAlignText( text, xCurrent );
+        auto  pos = centerAlignText( display, text, xCurrent );
         display.setCursor( pos.x, yCursor );
         display.print(text);
         yCursor -= pos.h + lineSpacing;
@@ -787,7 +1018,7 @@ void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
       , tarriffIn.minute );
     {
       display.setFont(&FreeSansBold12pt7b); 
-      auto pos = centerAlignText( text, xCurrent );
+      auto pos = centerAlignText( display, text, xCurrent );
       display.setCursor( pos.x, yCursor );
       display.print(text);
       yCursor -= pos.h + lineSpacing;
@@ -798,7 +1029,7 @@ void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
     {
       display.setFont(&FreeSansBold12pt7b); 
       display.setTextSize(2);
-      auto pos = centerAlignText( text, xCurrent );
+      auto pos = centerAlignText( display, text, xCurrent );
       display.setCursor( pos.x, yCursor );
       display.print(text);
       display.setTextSize(1);
@@ -813,7 +1044,7 @@ void drawTariffMarker( const Time currentDayStart, uint xCoeff, uint yTariff
 
 }
 
-void drawGraph() 
+void drawGraph(ColourEPaper& display) 
 {
     const int left = 0;
     const int top = SCREEN_HEIGHT / 2;
@@ -822,7 +1053,7 @@ void drawGraph()
 
     //  display.drawLine(0, 15, 0, 63, SCREEN_BLACK);  // Draw Axes
     display.drawLine(left, top + h, w, top + h, SCREEN_BLACK);
-    int i = 1;
+ 
     const Time currentTariffTime = currentTime.roundDown(Time::HalfHour);
     const Time currentDayStart = currentTariffTime.roundDown(Time::Day);
 
@@ -897,8 +1128,8 @@ void drawGraph()
         const uint8_t hourValue = (firstHour + iHour) % 24;
 
         // Small Hour
-        auto xMarker = xCurrent - (hourValue >= 10 ? 8 : 4);
-        if ( xMarker < 0 ) xMarker = 0; //< Clip to left
+        const auto hourTickSpacing = (hourValue >= 10 ? 8 : 4);
+        auto xMarker = (xCurrent > hourTickSpacing) ? xCurrent - hourTickSpacing : 0; //< Clip to left
         display.setCursor( xMarker, top + h + 13 );
         display.setFont(&FreeSans9pt7b);  
         display.print( hourValue );
@@ -908,19 +1139,19 @@ void drawGraph()
         display.print( ":00" );
     }
 
-    if (iLowestTariff != -1)
+    if (iLowestTariff != 255)
     { 
         // Draw triangle above the lowest tariff visible, to highlight it
-        drawTariffMarker(currentDayStart, xCoeff, yTariff, iLowestTariff, SCREEN_GREEN);
+        drawTariffMarker( display, currentDayStart, xCoeff, yTariff, iLowestTariff, SCREEN_GREEN);
     }
-    if (iHighestTariff != -1)
+    if (iHighestTariff != 255)
     {
         // Draw triangle above the lowest tariff visible, to highlight it
-        drawTariffMarker(currentDayStart,  xCoeff, yTariff, iHighestTariff, SCREEN_RED);
+        drawTariffMarker( display, currentDayStart,  xCoeff, yTariff, iHighestTariff, SCREEN_RED);
     }
-    if (iNextLow != -1)
+    if (iNextLow != 255)
     {
         // Draw triangle above the lowest tariff visible, to highlight it
-        drawTariffMarker(currentDayStart,  xCoeff, yTariff, iNextLow, SCREEN_BLUE);
+        drawTariffMarker( display, currentDayStart,  xCoeff, yTariff, iNextLow, SCREEN_BLUE);
     }
 }

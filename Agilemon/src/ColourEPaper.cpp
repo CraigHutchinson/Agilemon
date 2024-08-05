@@ -1,19 +1,48 @@
 #include "ColourEPaper.h"
 
-ColourEPaper::ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin ) : Adafruit_GFX(w, h), buffer1(NULL), buffer2(NULL)
+//https://www.laskakit.cz/user/related_files/gdep0565d90.pdf
+enum Command
+{
+    /** TODO: 2 bytes data */
+      PanelSetting = 0b0
+    , PowerOff = 0b00000010 // 0x02
+    , PowerOn  = 0b00000100 // 0x04
+
+    /** Refresh display according to SRAM data and LUT
+     * After Display refresh, BUSY_N signal becomes '0' 
+     * until diplsay update is finished
+     * DataPayload = N/A
+     */
+    , DisplayRefresh = 0b00010010 // 0x12
+
+    /** Stop data transmission
+     * DataPayload = 1-bytes (0=  not all data sent, 1 all has been sent)
+     */
+    , DataStop = 0b00010001 
+};
+
+ColourEPaper::ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, int sclk_pin, int copi_pin, int cs_pin ) 
+  : Adafruit_GFX(w, h), buffer1(NULL), buffer2(NULL)
 {
     dcPin = dc_pin;
     busyPin = busy_pin;
     rstPin = rst_pin;
+    csPin = cs_pin;
     
     if (debugOn)
     {
         Serial.println("Setting Constructor pinModes");
     }
+
+    // pinModes
     pinMode(dcPin, OUTPUT);
     pinMode(busyPin, INPUT);
     pinMode(rstPin, OUTPUT);
+    pinMode(csPin, OUTPUT);
 
+    // pin and spi pointer allocation
+    spi = new SPIClass(HSPI);
+    spi->begin(sclk_pin, -1, copi_pin, cs_pin);
     spiSettingsObject = SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE0);
 }
 
@@ -25,72 +54,14 @@ ColourEPaper::~ColourEPaper()
     delete spi;
 }
 
-bool ColourEPaper::begin(void)
+bool ColourEPaper::begin()
 {
-    // pin and spi pointer allocation
-    spi = new SPIClass(HSPI);
-
-    if (debugOn)
-    {
-        Serial.println("Setting begin pinModes(csPin stuff done later)");
-
-        Serial.print("rstPin\t");
-        Serial.println(rstPin);
-        Serial.print("dcPin\t");
-        Serial.println(dcPin);
-        Serial.print("busyPin\t");
-        Serial.println(busyPin);
-    }
-    // pinModes
-    // csPin stuff is done later since automatic SPI initialization occurs at spi->begin()
-
-    pinMode(rstPin, OUTPUT);
-    pinMode(dcPin, OUTPUT);
-    pinMode(busyPin, INPUT);
-
     // SPI init
 
     if (debugOn)
     {
         Serial.println("SPI init");
     }
-    spi->begin();
-
-    //CsPin init and pinMode
-    csPin = spi->pinSS();
-    pinMode(csPin, OUTPUT);
-    if (debugOn)
-    {
-        Serial.print("csPin\t");
-        Serial.println(csPin);
-    }
-
-
-    spi->beginTransaction(spiSettingsObject);
-
-    // everything below can be it's own function
-    return frameBufferAndInit();
-}
-
-bool ColourEPaper::begin(int sclk_pin, int copi_pin, int cs_pin)
-{
-    // pin and spi pointer allocation
-    csPin = cs_pin;
-    spi = new SPIClass(HSPI);
-
-    // pinModes
-    pinMode(csPin, OUTPUT);
-    pinMode(rstPin, OUTPUT);
-    pinMode(dcPin, OUTPUT);
-    pinMode(busyPin, INPUT);
-
-    // SPI init
-
-    if (debugOn)
-    {
-        Serial.println("SPI init");
-    }
-    spi->begin(sclk_pin, -1, copi_pin, cs_pin);
     spi->beginTransaction(spiSettingsObject);
 
     return frameBufferAndInit();
@@ -109,7 +80,19 @@ bool ColourEPaper::frameBufferAndInit()
     const auto frameSizeBytes = (WIDTH * HEIGHT / 2);
     const auto bufferSize = frameSizeBytes / 2;
     buffer1 = new char[bufferSize];
+    
+    if (debugOn)
+    {
+        Serial.printf("First buffer of size %u\n", bufferSize );
+    }
+
+
     buffer2 = new char[bufferSize];
+
+    if (debugOn)
+    {
+        Serial.printf("Second buffer of size %u\n", bufferSize );
+    }
 
     if (buffer1 == NULL || buffer2 == NULL)
     {
@@ -146,13 +129,35 @@ bool ColourEPaper::frameBufferAndInit()
         Serial.println("Reset complete");
     }
 
-    writeSPI(0x00, true);
-    writeSPI(0x2F, false);
-    writeSPI(0x00, false);
+    writeSPI(PanelSetting, true);
+    union ScanPanelSetting
+    {
+        struct Bits
+        {
+            uint8_t _SET : 2;// = 1;
+            uint8_t _DONTCARE : 2;// = 0;
+            uint8_t verticalScanUp : 1;// = 0;
+            uint8_t horizontalScanRight : 1;// = 1;
+            uint8_t dcDcConverterOn : 1;// = 1;
+            uint8_t controllerReset : 1;// = 0;
+        } bit = {};
+        uint8_t raw;
+    };
+    ScanPanelSetting scanSetting;
+    scanSetting.bit._SET = 0b11;
+    scanSetting.bit._DONTCARE = 0b11;
+    scanSetting.bit.verticalScanUp = 0;
+    scanSetting.bit.horizontalScanRight = 1;
+    scanSetting.bit.dcDcConverterOn = 1;
+    scanSetting.bit.controllerReset = 1; //< TODO: Reset on init?
+    //Serial.printf( "scanSetting.raw %x\n", (int)scanSetting.raw);
+    writeSPI( 0x2f/*scanSetting.raw*/, false);
+    writeSPI(0b00001000, false); //TODO: was 0x00 but should be set as per 8.1.1
 
+    //8.1.2 Power Settign Register  
     writeSPI(0x01, true);
     writeSPI(0x37, false); // trying default of 00001000 orig 0x37
-    writeSPI(0x01, false); // trying default of 0x01, orig 0x00
+    writeSPI(0x00, false); // trying default of 0x01, orig 0x00
     writeSPI(0x05, false);
     writeSPI(0x05, false);
 
@@ -218,12 +223,12 @@ void ColourEPaper::display(void)
         // trigger gddr to screen
         Serial.println("Triggering send to screen.");
     }
-    writeSPI(0x04, true);
+    writeSPI(PowerOn, true);
     if (!(busyHigh()))
     {
         Serial.println("BusyHigh1 failed");
     }
-    writeSPI(0x12, true);
+    writeSPI(DisplayRefresh, true);
 
     // either block until screen finishes (waitForScreenBlocking) or do something else and then send POF + endtransaction yourself once busy is high (checkBusy + sendPOFandLeaveSPI)
 }
@@ -309,7 +314,7 @@ void ColourEPaper::test()
     
     Serial.println("EPD::Test - Sent all clear commands. Refreshing screen");
     
-    writeSPI(0x04, true);
+    writeSPI(PowerOn, true);
     if (!(busyHigh()))
     {
         Serial.println("EPD::Test - BusyHigh1 failed");
@@ -395,7 +400,8 @@ void ColourEPaper::sendPOFandLeaveSPI(void)
     {
         Serial.println("Shutting off and leaving SPI");
     }
-    writeSPI(0x02, true);
+
+    writeSPI(PowerOff, true);
     if (!(busyLow()))
     {
         if (debugOn)
@@ -426,7 +432,7 @@ static void EPD_4IN01F_BusyLow(void)// If BUSYN=1 then waiting
 
 static void EPD_4IN01F_Show(void)
 {
-    EPD_SendCommand(0x04);//0x04
+    EPD_SendCommand(PowerOn);//0x04
     EPD_4IN01F_BusyHigh();
     EPD_SendCommand(0x12);//0x12
     EPD_4IN01F_BusyHigh();
