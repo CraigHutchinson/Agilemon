@@ -21,8 +21,10 @@ public:
     ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, int sclk_pin, int copi_pin, int cs_pin);
     ~ColourEPaper();
 
+    bool initialisePanel();
+
     bool begin(void);
-    bool begin(int sclk_pin, int copi_pin, int cs_pin);
+    
     void display(void);
     void clearDisplay(void);
     void drawPixel(int16_t x, int16_t y, uint16_t color);
@@ -38,7 +40,6 @@ protected:
     bool busyHigh(void);
     bool busyLow(void);
     void setResolution();
-    SPIClass *spi;
     SPISettings spiSettingsObject;
     char *buffer1 = NULL;
     char *buffer2 = NULL;
