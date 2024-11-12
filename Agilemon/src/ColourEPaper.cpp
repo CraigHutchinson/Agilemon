@@ -21,7 +21,10 @@ enum Command
     , DataStop = 0b00010001 
 };
 
-ColourEPaper::ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, int sclk_pin, int copi_pin, int cs_pin ) 
+
+SPIClass spi = SPIClass(HSPI);
+
+ColourEPaper::ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, int sclk_pin, int mosi_pin, int cs_pin ) 
   : Adafruit_GFX(w, h), buffer1(NULL), buffer2(NULL)
 {
     dcPin = dc_pin;
@@ -41,28 +44,20 @@ ColourEPaper::ColourEPaper(int w, int h, int rst_pin, int dc_pin, int busy_pin, 
     pinMode(csPin, OUTPUT);
 
     // pin and spi pointer allocation
-    spi = new SPIClass(HSPI);
-    spi->begin(sclk_pin, -1, copi_pin, cs_pin);
+    spi.begin(sclk_pin, -1, mosi_pin, cs_pin);
     spiSettingsObject = SPISettings(SPI_SPEED, MSBFIRST, SPI_MODE0);
 }
+
+void heapInfo();
 
 ColourEPaper::~ColourEPaper()
 {
     free(buffer1);
     free(buffer2);
-
-    delete spi;
 }
 
 bool ColourEPaper::begin()
 {
-    // SPI init
-
-    if (debugOn)
-    {
-        Serial.println("SPI init");
-    }
-    spi->beginTransaction(spiSettingsObject);
 
     return frameBufferAndInit();
 }
@@ -80,10 +75,10 @@ bool ColourEPaper::frameBufferAndInit()
     const auto frameSizeBytes = (WIDTH * HEIGHT / 2);
     const auto bufferSize = frameSizeBytes / 2;
     buffer1 = new char[bufferSize];
-    
     if (debugOn)
     {
         Serial.printf("First buffer of size %u\n", bufferSize );
+        heapInfo();
     }
 
 
@@ -92,6 +87,7 @@ bool ColourEPaper::frameBufferAndInit()
     if (debugOn)
     {
         Serial.printf("Second buffer of size %u\n", bufferSize );
+        heapInfo();
     }
 
     if (buffer1 == NULL || buffer2 == NULL)
@@ -110,6 +106,18 @@ bool ColourEPaper::frameBufferAndInit()
     memset(buffer1, 0x11, bufferSize); // fill everything with white
     memset(buffer2, 0x11, bufferSize); // fill everything with white
 
+    return initialisePanel();
+}
+
+bool ColourEPaper::initialisePanel()
+{
+    // SPI init
+
+    if (debugOn)
+    {
+        Serial.println("SPI init");
+    }
+    spi.beginTransaction(spiSettingsObject);
     // send initialization commands to screen
     if (debugOn)
     {
@@ -128,6 +136,14 @@ bool ColourEPaper::frameBufferAndInit()
     {
         Serial.println("Reset complete");
     }
+
+    // SPI init
+
+    if (debugOn)
+    {
+        Serial.println("SPI init");
+    }
+    spi.beginTransaction(spiSettingsObject);
 
     writeSPI(PanelSetting, true);
     union ScanPanelSetting
@@ -187,7 +203,7 @@ bool ColourEPaper::frameBufferAndInit()
     writeSPI(0xE3, true);
     writeSPI(0xAA, false);
 
-    spi->endTransaction();
+    spi.endTransaction();
 
     if (debugOn)
     {
@@ -199,7 +215,7 @@ bool ColourEPaper::frameBufferAndInit()
 
 void ColourEPaper::display(void)
 {
-    spi->beginTransaction(spiSettingsObject);
+    spi.beginTransaction(spiSettingsObject);
     setResolution();
 
     writeSPI(0x10, true);
@@ -212,8 +228,8 @@ void ColourEPaper::display(void)
     digitalWrite(dcPin, HIGH);
     digitalWrite(csPin, LOW);
 
-    spi->transfer( buffer1, (WIDTH * HEIGHT / 2) / 2 );
-    spi->transfer( buffer2, (WIDTH * HEIGHT / 2) / 2 );
+    spi.transfer( buffer1, (WIDTH * HEIGHT / 2) / 2 );
+    spi.transfer( buffer2, (WIDTH * HEIGHT / 2) / 2 );
 
     digitalWrite(csPin, HIGH);
 
@@ -245,7 +261,7 @@ void ColourEPaper::setResolution()
     //Data
     digitalWrite(dcPin, HIGH);
     digitalWrite(csPin, LOW);
-    spi->transfer( resolution, sizeof(resolution) );
+    spi.transfer( resolution, sizeof(resolution) );
     digitalWrite(csPin, HIGH);
 }
 void ColourEPaper::clearDisplay(void)
@@ -286,10 +302,13 @@ void ColourEPaper::drawPixel(int16_t x, int16_t y, uint16_t color)
 
 void ColourEPaper::test()
 {
+    Serial.println("EPD::Test - Initialising panel");
+    initialisePanel();
+
     Serial.println("EPD::Test - Screen BARS Started");
     // used for testing begin function
     // This function writes bars of each colour to the screen. Use blocking wait function or do it manually with check busy and POF+SPIShutdown
-    spi->beginTransaction(spiSettingsObject);
+    spi.beginTransaction(spiSettingsObject);
     
     setResolution();
     Serial.println("EPD::Test - Resolution set");
@@ -339,7 +358,7 @@ void ColourEPaper::writeSPI(uint8_t something, bool command)
 
     digitalWrite(csPin, LOW);
 
-    spi->transfer(something);
+    spi.transfer(something);
 
     digitalWrite(csPin, HIGH);
 }
@@ -409,7 +428,7 @@ void ColourEPaper::sendPOFandLeaveSPI(void)
             Serial.println("BusyLow1 failed");
         }
     }
-    spi->endTransaction();
+    spi.endTransaction();
 }
 /*
 // ENter sleep mode
@@ -484,8 +503,8 @@ int EPD_4IN01F_init()
     //Data
     digitalWrite(dcPin, HIGH);
     digitalWrite(csPin, LOW);
-    spi->transfer( &WIDTH, 2 );
-    spi->transfer( &HEIGHT, 2 );
+    spi.transfer( &WIDTH, 2 );
+    spi.transfer( &HEIGHT, 2 );
     digitalWrite(csPin, HIGH);
     
     EPD_SendCommand(0x10);//begin write data to e-Paper

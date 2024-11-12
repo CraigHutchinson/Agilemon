@@ -26,6 +26,14 @@
 #include <Fonts/FreeSans9pt7b.h>
 #include "ColourEPaper.h"
 
+void heapInfo()
+{
+  auto heapTotal = heap_caps_get_total_size(MALLOC_CAP_8BIT);
+auto heapFree = heap_caps_get_free_size(MALLOC_CAP_8BIT);
+auto heapLargest = heap_caps_get_largest_free_block(MALLOC_CAP_8BIT);
+Serial.printf( "Heap free %u of %u (Chunk: largest %u)\n", heapFree, heapTotal, heapLargest );
+}
+
 const char firmwareDate[] = "07/02/2024";
 
 /** User-provided configuration that contains SSID, WiFi wifiPassword & Octopus personal authorisation code
@@ -93,7 +101,7 @@ const char* ntpServer2 = "time.nist.gov";
 const char* posixTimeZone = "GMT0BST,M3.5.0/1,M10.5.0";// Time Zone as "Europe/London"	
 
 // Cert for Octopus
-const char* octopus =
+const char* octopus PROGMEM =
   "-----BEGIN CERTIFICATE-----\n"
   "MIIEdTCCA12gAwIBAgIJAKcOSkw0grd/MA0GCSqGSIb3DQEBCwUAMGgxCzAJBgNV\n"
   "BAYTAlVTMSUwIwYDVQQKExxTdGFyZmllbGQgVGVjaG5vbG9naWVzLCBJbmMuMTIw\n"
@@ -413,9 +421,12 @@ uint8_t getBatteryPercent(void)
 }
 #endif
 
+//TEST: char buffer[150*448];
+//TEST: char buffer2[150*448];
+
 void setup()
  {
-  
+
   // initialize digital pin LED_PIN as an output.
   pinMode(LED_PIN, OUTPUT);
   digitalWrite(LED_PIN, LED_ON);  // turn the LED on
@@ -433,6 +444,27 @@ void setup()
 
 #endif
   
+  heap_caps_print_heap_info(MALLOC_CAP_8BIT);
+  
+  heap_caps_dump(MALLOC_CAP_8BIT);
+
+  Serial.print("Crosssy\n");
+  auto buffer = new byte[112961];
+  Serial.print("WOOOOO\n");
+
+        buffer[rand() % 112961]++;
+  #if 0
+  1073518208 = 91528; 1,073,609,736
+  1073611840 = 14648;
+  1073627984 = 112960;
+  while( true)
+  {
+        heapInfo();
+        buffer[rand() % sizeof(buffer)]++;
+        buffer2[rand() % sizeof(buffer2)]++;
+        new byte[heap_caps_get_largest_free_block(MALLOC_CAP_8BIT)];
+  }
+#endif
   // Time Setup
   sntp_set_time_sync_notification_cb(timeavailable);
 
@@ -598,7 +630,8 @@ void loop() {
       display.cp437(true); //< Use correct character tables
       display.setTextWrap(false); 
 
-      display.test();
+     // display.test();
+    heapInfo();
 
       const bool headless = false; //< Run without display
 
