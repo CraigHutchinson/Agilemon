@@ -177,7 +177,7 @@ module TFT()
 module tftClips()
 {
     TFTclipStep = TFTpadding*2 + 0.1;
-    TFTclipDepth = 0.75;
+    TFTclipDepth = 0.5;
     scalet = [1,1] - [TFTclipStep/TFTsize.x
                      ,TFTclipStep/TFTsize.y];
     
@@ -195,8 +195,8 @@ module tftClips()
         }
         
         union(){
-        translate( [TFTsize.x/3, 0, 0]) cube( [5, TFTsize.y+10, 10], center=true);
-        translate( [-TFTsize.x/3, 0, 0]) cube( [5, TFTsize.y+10, 10], center=true);
+        translate( [TFTsize.x/3, 0, 0]) cube( [15, TFTsize.y+10, 10], center=true);
+        translate( [-TFTsize.x/3, 0, 0]) cube( [15, TFTsize.y+10, 10], center=true);
         }
     }
 }
