@@ -2,6 +2,8 @@ $fn = 24;
 include <BOSL2/std.scad>
 
 
+// Datasheet: https://www.data-modul.com/sites/default/files/products/AB1024-EGA-specification-12051791.pdf
+
 // Padding for cushioning/air aroudn screen
 TFTpadding = 0.5;
 
@@ -12,7 +14,7 @@ TFTborder = [5.25, 4.6, 5.25, 9.11];
 TFTsize = [125.4, 99.7, 1.08];
 
 // TFT Position offset within frame to center the 'image' in the housing
-TFTpos = [0,(TFTborder.w - TFTborder.y),0];
+TFTpos = [(TFTborder.x - TFTborder.z),(TFTborder.w - TFTborder.y),0] / 2;
 
 // window x, y, width, height
 TFTwindowPadding = 0.5;
@@ -20,11 +22,16 @@ TFTwindowSize = TFTsize.xy - TFTborder.xy - TFTborder.zw
  + [TFTwindowPadding,TFTwindowPadding];
 
 // Frame wall width 
-WALLwidth = 2.0;
-WALLheight = 2.6;
+WALLwidth = 1.6;
+WALLheight = 1.6;
 
 //Frame front
 FRONTdepth = 1.2;
+FRONTframeWidth = [
+ WALLwidth+ (TFTpos.x>0 ? TFTpos.x:0)
+,WALLwidth+ (TFTpos.y>0 ? TFTpos.y:0)
+,WALLwidth+ (TFTpos.x<0 ? -TFTpos.x:0)
+,WALLwidth+ (TFTpos.y<0 ? -TFTpos.y:0)];
 
 // Bevel width in window opening
 FRONTwindowBevel = 10;
@@ -62,7 +69,10 @@ TFTconnectorRibbonOffset = -[0,TFTribbonLength - (PI * TFTribbonBendRadius ) - T
 // TFT ribbon connector position (note it is off-center to screen)
 TFTconnectorPos = TFTpos + [TFTsize.x/2, TFTsize.y/2, 0]- [55.47+TFTconnectorWidth/2,0,0] + TFTconnectorRibbonOffset;
 
-TFTribbonBendStartAngle = 125;
+//The actual contact dpeth... should be less
+TFTconnectorDepth = 3.67;
+
+TFTribbonBendStartAngle = 163;
 
 pcbStl = "LILYGO T5 2.13inch v2.3.2 DEPG0213BN.stl";
 // Measured position to center of screen ribbon connector 
@@ -72,12 +82,21 @@ pcbStlRotate = [180,0,90];
 
 module TFTribbon( widthPad = 0, offset = 0 )
 {
+//Turtle3d https://github.com/BelfrySCAD/BOSL2/wiki/turtle3d.scad#function-turtle3d
+
  translate( TFTribbonPos )
  {
-    path = turtle([
+ //TFTribbonLength= 24.01
+ coplanarLength = 5;
+    bendState = turtle([
     "setdir",[0,1]
-    , "arcleft", TFTribbonBendRadius, TFTribbonBendStartAngle
-    , "move", 20, ]);
+    , "arcleft", TFTribbonBendRadius, TFTribbonBendStartAngle]
+    , full_state=true);
+    bendLength = path_length(bendState[0]);
+    linearLength = TFTribbonLength-TFTconnectorDepth-bendLength;
+    
+    path= turtle([ "move", linearLength-coplanarLength, "arcleft", TFTribbonBendRadius,180-TFTribbonBendStartAngle,  "move", coplanarLength], state=bendState);
+    
     yrot(-90)
     linear_extrude(TFTribbonWidth+widthPad*2,center=true)
     offset(offset)
@@ -93,14 +112,21 @@ module tftOutline()
 {
  
    translate(TFTpos)
-         square( TFTsize.xy, true ); 
+         square( TFTsize.xy, center=true ); 
 }
+
+module windowOutline()
+ {  
+ //translate( TFTpos ) 
+    square( TFTwindowSize, center=true ); 
+ };
+
 
 module battery()
 {
 
 down(batterySize.z * batteryExpansionFactor)
-right(0)
+right(batterySize.y/4)
  cube(batterySize,anchor=TOP);
 }
 % battery();
@@ -112,18 +138,10 @@ module TFT()
  % TFT();
 % TFTribbon();
  
-module windowOutline()
- {  
- translate( TFTpos )
-    translate(-TFTwindowSize.xy/2)
-         square( TFTwindowSize, false ); 
- };
-
 module frontFrameOutline() 
 {
-translate( -TFTsize.xy/2)
     offset(WALLwidth + TFTpadding) 
-         square( TFTsize.xy + TFTpos, false ); 
+         square( TFTsize.xy + FRONTframeWidth.xy + FRONTframeWidth.zw, center=true ); 
 }
          
          
@@ -143,11 +161,11 @@ translate( -TFTsize.xy/2)
  
  module windowCutout()
  {
-    scalet = [1,1] + [FRONTwindowBevel/TFTwindowSize.x
+    scaleT = [1,1] + [FRONTwindowBevel/TFTwindowSize.x
                      ,FRONTwindowBevel/TFTwindowSize.y];
   
-  translate([0,0,FRONTwindowOffset])
-   linear_extrude( height = FRONTdepth+0.01, scale = scalet )  windowOutline();
+  up(FRONTwindowOffset)
+   linear_extrude( height = FRONTdepth+0.01, scale = scaleT )  windowOutline();
 
  }
  // windowCutout();
