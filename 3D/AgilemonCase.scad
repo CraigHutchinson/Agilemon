@@ -5,7 +5,7 @@ include <BOSL2/std.scad>
 // Datasheet: https://www.data-modul.com/sites/default/files/products/AB1024-EGA-specification-12051791.pdf
 
 // Padding for cushioning/air aroudn screen
-TFTpadding = 0.5;
+TFTpadding = 0.33;
 
 // Border overlap left-Top-Right-Bottom
 TFTborder = [5.25, 4.6, 5.25, 9.11];
@@ -14,7 +14,10 @@ TFTborder = [5.25, 4.6, 5.25, 9.11];
 TFTsize = [125.4, 99.7, 1.08];
 
 // TFT Position offset within frame to center the 'image' in the housing
-TFTpos = [(TFTborder.x - TFTborder.z),(TFTborder.w - TFTborder.y),0] / 2;
+TFTpos = [
+ TFTborder.x - TFTborder.z
+,TFTborder.w - TFTborder.y
+,0] / 2;
 
 // window x, y, width, height
 TFTwindowPadding = 0.5;
@@ -28,10 +31,10 @@ WALLheight = 1.6;
 //Frame front
 FRONTdepth = 1.2;
 FRONTframeWidth = [
- WALLwidth+ (TFTpos.x>0 ? TFTpos.x:0)
-,WALLwidth+ (TFTpos.y>0 ? TFTpos.y:0)
-,WALLwidth+ (TFTpos.x<0 ? -TFTpos.x:0)
-,WALLwidth+ (TFTpos.y<0 ? -TFTpos.y:0)];
+ WALLwidth+ (TFTpos.x<0 ? -TFTpos.x*2:0)
+,WALLwidth+ (TFTpos.y<0 ? -TFTpos.y*2:0)
+,WALLwidth+ (TFTpos.x>0 ? TFTpos.x*2:0)
+,WALLwidth+ (TFTpos.y>0 ? TFTpos.y*2:0)];
 
 // Bevel width in window opening
 FRONTwindowBevel = 10;
@@ -122,6 +125,13 @@ module windowOutline()
  };
 
 
+module frameOutline() 
+{
+    //offset(WALLwidth + TFTpadding) 
+    square( TFTsize.xy + FRONTframeWidth.xy + FRONTframeWidth.zw, center=true ); 
+}
+       
+       
 module battery()
 {
 
@@ -135,15 +145,9 @@ module TFT()
  {  
    color([1, 0, 1, 0.2] ) linear_extrude(TFTsize.z) tftOutline();
  };
- % TFT();
+% TFT();
 % TFTribbon();
- 
-module frontFrameOutline() 
-{
-    offset(WALLwidth + TFTpadding) 
-         square( TFTsize.xy + FRONTframeWidth.xy + FRONTframeWidth.zw, center=true ); 
-}
-         
+   
          
  module tftSpaceOutline()
  {    
@@ -154,7 +158,7 @@ module frontFrameOutline()
  {
     difference()
     {
-         frontFrameOutline();
+         frameOutline();
          tftSpaceOutline();
     }
  }
@@ -222,7 +226,7 @@ module tftClips()
          linear_extrude( FRONTdepth ) 
            difference()
              {
-                frontFrameOutline();
+                frameOutline();
                 windowOutline();
             }
         windowCutout();
